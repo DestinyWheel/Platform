@@ -5,8 +5,10 @@ node_modules/
 # build output
 dist/
 build/
-storage/plugins/
 *.tsbuildinfo
+
+# 运行时产物：插件编译结果、打包上传用的 zip
+storage/
 
 # 本地数据库（PGlite 数据目录）
 .data/

@@ -1,0 +1,10 @@
+{
+  "id": "dice",
+  "name": "骰子对决",
+  "version": "0.1.0",
+  "apiVersion": "^1.0.0",
+  "players": { "min": 2, "max": 4 },
+  "modes": ["turnbased"],
+  "tags": ["示例", "运气"],
+  "estimatedMinutes": 3
+}

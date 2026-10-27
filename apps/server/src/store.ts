@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import type { BaseState, LogEntry, TableStatus } from '@platform/sdk';
+import type { BaseState, GameManifest, LogEntry, TableStatus } from '@platform/sdk';
 import type { Db } from './db/types.js';
 
 export interface UserRecord {
   id: string;
   name: string;
   createdAt: number;
+  /** 第一个注册的人自动成为管理员（私人平台够用，M3 再加角色表） */
+  isAdmin: boolean;
 }
 
 export interface TablePlayer {
@@ -53,6 +55,7 @@ export interface TableWrite {
 export interface Store {
   findOrCreateUser(name: string): Promise<UserRecord>;
   getUser(id: string): Promise<UserRecord | undefined>;
+  countUsers(): Promise<number>;
 
   createTable(record: TableRecord): Promise<void>;
   getTable(id: string): Promise<TableRecord | undefined>;
@@ -64,6 +67,28 @@ export interface Store {
   listTables(): Promise<TableRecord[]>;
   /** 已到期需要代走的桌（只取 status='playing'） */
   listExpired(now: number): Promise<TableRecord[]>;
+
+  /* ------------------------- 插件版本 ------------------------- */
+  getGameVersion(gameId: string, version: string): Promise<GameVersionRecord | undefined>;
+  listGameVersions(): Promise<GameVersionRecord[]>;
+  /** 写入/更新一行版本记录；status 由激活流程单独维护，这里不动它 */
+  upsertGameVersion(record: GameVersionRecord): Promise<void>;
+  markVersionFailed(gameId: string, version: string, error: string): Promise<void>;
+  /** 事务：把该游戏原 active 版本降级为 retired，再激活指定版本 */
+  setActiveVersion(gameId: string, version: string): Promise<void>;
+}
+
+export interface GameVersionRecord {
+  gameId: string;
+  version: string;
+  apiVersion: string;
+  manifest: GameManifest;
+  dir: string;
+  hash: string;
+  status: 'pending' | 'active' | 'retired' | 'failed';
+  error: string | null;
+  createdAt: number;
+  activatedAt: number | null;
 }
 
 interface TableRow {
@@ -108,27 +133,44 @@ export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
   async findOrCreateUser(name: string): Promise<UserRecord> {
+    // 第一个注册的人自动成为管理员
+    const isFirst = (await this.countUsers()) === 0;
+
     // 同名并发登录时靠唯一索引兜底，冲突了就回读
     await this.db.execute(
-      'INSERT INTO users (id, name, created_at) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING',
-      [randomUUID(), name, Date.now()],
+      `INSERT INTO users (id, name, created_at, is_admin)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING`,
+      [randomUUID(), name, Date.now(), isFirst],
     );
-    const rows = await this.db.query<{ id: string; name: string; created_at: number }>(
-      'SELECT id, name, created_at FROM users WHERE name = $1',
+
+    const rows = await this.db.query<{ id: string; name: string; created_at: number; is_admin: boolean }>(
+      'SELECT id, name, created_at, is_admin FROM users WHERE name = $1',
       [name],
     );
     const row = rows[0];
     if (!row) throw new Error(`无法创建用户：${name}`);
-    return { id: row.id, name: row.name, createdAt: Number(row.created_at) };
+    return {
+      id: row.id,
+      name: row.name,
+      createdAt: Number(row.created_at),
+      isAdmin: Boolean(row.is_admin),
+    };
   }
 
   async getUser(id: string): Promise<UserRecord | undefined> {
-    const rows = await this.db.query<{ id: string; name: string; created_at: number }>(
-      'SELECT id, name, created_at FROM users WHERE id = $1',
+    const rows = await this.db.query<{ id: string; name: string; created_at: number; is_admin: boolean }>(
+      'SELECT id, name, created_at, is_admin FROM users WHERE id = $1',
       [id],
     );
     const row = rows[0];
-    return row ? { id: row.id, name: row.name, createdAt: Number(row.created_at) } : undefined;
+    return row
+      ? { id: row.id, name: row.name, createdAt: Number(row.created_at), isAdmin: Boolean(row.is_admin) }
+      : undefined;
+  }
+
+  async countUsers(): Promise<number> {
+    const rows = await this.db.query<{ n: number }>('SELECT count(*)::int AS n FROM users');
+    return Number(rows[0]?.n ?? 0);
   }
 
   async createTable(record: TableRecord): Promise<void> {
@@ -225,4 +267,105 @@ export class PgStore implements Store {
     );
     return rows.map(toRecord);
   }
+
+  /* ------------------------- 插件版本 ------------------------- */
+
+  async getGameVersion(gameId: string, version: string): Promise<GameVersionRecord | undefined> {
+    const rows = await this.db.query<GameVersionRow>(
+      'SELECT * FROM game_versions WHERE game_id = $1 AND version = $2',
+      [gameId, version],
+    );
+    const row = rows[0];
+    return row ? toVersionRecord(row) : undefined;
+  }
+
+  async listGameVersions(): Promise<GameVersionRecord[]> {
+    const rows = await this.db.query<GameVersionRow>(
+      'SELECT * FROM game_versions ORDER BY game_id ASC, created_at DESC',
+    );
+    return rows.map(toVersionRecord);
+  }
+
+  async upsertGameVersion(record: GameVersionRecord): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO game_versions
+         (game_id, version, api_version, manifest, dir, hash, status, error, created_at, activated_at)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT (game_id, version) DO UPDATE SET
+         api_version  = EXCLUDED.api_version,
+         manifest     = EXCLUDED.manifest,
+         dir          = EXCLUDED.dir,
+         hash         = EXCLUDED.hash,
+         error        = EXCLUDED.error,
+         status       = CASE WHEN game_versions.status = 'active' THEN 'active' ELSE EXCLUDED.status END,
+         activated_at = COALESCE(EXCLUDED.activated_at, game_versions.activated_at)`,
+      [
+        record.gameId,
+        record.version,
+        record.apiVersion,
+        JSON.stringify(record.manifest),
+        record.dir,
+        record.hash,
+        record.status,
+        record.error,
+        record.createdAt,
+        record.activatedAt,
+      ],
+    );
+  }
+
+  async markVersionFailed(gameId: string, version: string, error: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO game_versions
+         (game_id, version, api_version, manifest, dir, hash, status, error, created_at, activated_at)
+       VALUES ($1,$2,'','{}'::jsonb,'','', 'failed', $3, $4, NULL)
+       ON CONFLICT (game_id, version) DO UPDATE SET
+         error  = EXCLUDED.error,
+         status = CASE WHEN game_versions.status = 'active' THEN 'active' ELSE 'failed' END`,
+      [gameId, version, error, Date.now()],
+    );
+  }
+
+  async setActiveVersion(gameId: string, version: string): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await tx.execute(
+        `UPDATE game_versions SET status = 'retired'
+          WHERE game_id = $1 AND status = 'active' AND version <> $2`,
+        [gameId, version],
+      );
+      await tx.execute(
+        `UPDATE game_versions SET status = 'active', activated_at = $3
+          WHERE game_id = $1 AND version = $2`,
+        [gameId, version, Date.now()],
+      );
+    });
+  }
+}
+
+interface GameVersionRow {
+  game_id: string;
+  version: string;
+  api_version: string;
+  manifest: GameManifest;
+  dir: string;
+  hash: string;
+  status: string;
+  error: string | null;
+  created_at: number;
+  activated_at: number | null;
+}
+
+function toVersionRecord(row: GameVersionRow): GameVersionRecord {
+  return {
+    gameId: row.game_id,
+    version: row.version,
+    apiVersion: row.api_version,
+    manifest: row.manifest,
+    dir: row.dir,
+    hash: row.hash,
+    status: row.status as GameVersionRecord['status'],
+    error: row.error,
+    createdAt: Number(row.created_at),
+    activatedAt: row.activated_at === null ? null : Number(row.activated_at),
+  };
 }

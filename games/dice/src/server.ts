@@ -1,19 +1,21 @@
 /**
- * 示例插件：骰子对决
+ * 示例插件：骰子对决（服务端）
  *
  * 规则：2–4 人，共 N 轮，每轮每人掷一次 d6，累计点数最高者胜。
- * 用途：把「状态机 + 纯 reducer + 超时兜底 + 终局排名」这条链路跑通，
- * 后续真游戏的写法与之完全一致。
  */
 import { z } from 'zod';
 import type {
   ActionDef,
   BaseState,
+  GameManifest,
   GamePlugin,
   PlayerId,
   PublicView,
   StateDef,
 } from '@platform/sdk';
+import rawManifest from '../manifest.json';
+
+const manifest = rawManifest as GameManifest;
 
 export interface DiceState extends BaseState {
   /** 累计点数 */
@@ -25,7 +27,7 @@ export interface DiceState extends BaseState {
 }
 
 function zeroed<T>(players: PlayerId[], value: T): Record<PlayerId, T> {
-  return Object.fromEntries(players.map((p) => [p, value])) as Record<PlayerId, T>;
+  return Object.fromEntries(players.map((player) => [player, value])) as Record<PlayerId, T>;
 }
 
 /** 按累计点数从高到低分组，同分并列 */
@@ -66,7 +68,7 @@ const roll: ActionDef<DiceState> = {
     ctx.emit({ type: 'log', key: 'dice.roll', args: { player: who, value } });
     ctx.emit({ type: 'sound', key: 'dice.roll' });
 
-    const allRolled = state.players.every((p) => state.roundRolls[p] !== null);
+    const allRolled = state.players.every((player) => state.roundRolls[player] !== null);
     if (allRolled) {
       ctx.goTo('roundEnd');
       return;
@@ -78,7 +80,7 @@ const roll: ActionDef<DiceState> = {
 const states: Record<string, StateDef<DiceState>> = {
   roll: {
     type: 'activePlayer',
-    onTimeout(state, ctx) {
+    onTimeout() {
       // 超时自动替当前玩家掷一次
       return { type: 'roll', payload: {} };
     },
@@ -116,20 +118,12 @@ const states: Record<string, StateDef<DiceState>> = {
 };
 
 const dice: GamePlugin<DiceState> = {
-  manifest: {
-    id: 'dice',
-    name: '骰子对决',
-    version: '0.1.0',
-    apiVersion: '^1.0.0',
-    players: { min: 2, max: 4 },
-    modes: ['turnbased'],
-    tags: ['示例', '运气'],
-    estimatedMinutes: 3,
-  },
+  manifest,
 
   createState({ players, options, seed }) {
     const rawRounds = options.rounds;
-    const rounds = typeof rawRounds === 'number' && rawRounds >= 1 && rawRounds <= 10 ? rawRounds : 3;
+    const rounds =
+      typeof rawRounds === 'number' && rawRounds >= 1 && rawRounds <= 10 ? rawRounds : 3;
 
     return {
       players: [...players],

@@ -5,8 +5,7 @@
     "lib": ["ES2023"],
     "paths": {
       "@platform/sdk": ["../../packages/sdk/src/index.ts"],
-      "@platform/engine": ["../../packages/engine/src/index.ts"],
-      "@platform/game-dice": ["../../games/dice/src/index.ts"]
+      "@platform/engine": ["../../packages/engine/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

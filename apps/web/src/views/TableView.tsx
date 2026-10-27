@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type Session } from '../api';
-import { gameComponents } from '../games/registry';
+import { GameSurface } from '../host/GameSurface';
+import { useGameClient } from '../host/useGameClient';
 import { renderLog } from '../log';
 import { useTableSocket } from '../useTableSocket';
 
@@ -20,6 +21,11 @@ export function TableView({
   onExit: () => void;
 }) {
   const { snapshot, error, sendAction } = useTableSocket(tableId, session.token);
+  const { client, error: clientError } = useGameClient(
+    snapshot?.gameId ?? '',
+    snapshot?.gameVersion ?? '',
+  );
+
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
@@ -29,11 +35,6 @@ export function TableView({
     const timer = window.setInterval(() => setNow(Date.now()), 500);
     return () => window.clearInterval(timer);
   }, []);
-
-  const names = useMemo<Record<string, string>>(() => {
-    if (!snapshot) return {};
-    return Object.fromEntries(snapshot.players.map((player) => [player.id, player.name]));
-  }, [snapshot]);
 
   const logLength = snapshot?.log.length ?? 0;
   useEffect(() => {
@@ -74,11 +75,10 @@ export function TableView({
     return <div className="center">{error ?? '连接中…'}</div>;
   }
 
-  const Game = gameComponents[snapshot.gameId];
   const remainingMs = snapshot.deadlineAt === null ? null : Math.max(0, snapshot.deadlineAt - now);
   const canStart = snapshot.you.isHost && snapshot.players.length >= snapshot.minPlayers;
   const canJoin = !snapshot.you.isPlayer && snapshot.status === 'lobby';
-  const message = actionError ?? error;
+  const message = actionError ?? error ?? clientError;
 
   return (
     <div className="table-page">
@@ -147,19 +147,20 @@ export function TableView({
               </div>
               <div className="muted small">链接发给朋友，他们在同一个地址打开就能加入。</div>
             </div>
-          ) : snapshot.view ? (
-            Game ? (
-              <Game
-                view={snapshot.view}
-                you={session.user.id}
-                playerNames={names}
-                legal={snapshot.legal}
-                onAction={sendAction}
-              />
-            ) : (
-              <div className="muted">这个游戏还没有前端插件：{snapshot.gameId}</div>
-            )
-          ) : null}
+          ) : (
+            <GameSurface
+              client={client}
+              snapshot={{
+                status: snapshot.status,
+                view: snapshot.view,
+                legal: snapshot.legal,
+                deadlineAt: snapshot.deadlineAt,
+              }}
+              me={session.user.id}
+              players={snapshot.players}
+              onAction={sendAction}
+            />
+          )}
         </section>
 
         <aside className="sidebar">
@@ -168,7 +169,7 @@ export function TableView({
             {snapshot.log.map((entry) => (
               <li key={entry.seq}>
                 <span className="log-seq">{entry.seq}</span>
-                {renderLog(entry, names)}
+                {renderLog(entry, client)}
               </li>
             ))}
             {snapshot.log.length === 0 ? <li className="muted">还没有记录</li> : null}

@@ -2,7 +2,7 @@
 
 私人桌游平台（BGA 风格），游戏以插件形式存在，**新增/升级游戏不需要重启服务，也不需要重新发布前端**。
 
-当前进度：**M1 完成** —— M0 的骨架（登录、大厅、开桌、WS 实时对局、超时兜底）之上，状态已落库：重启不丢局、CAS 并发、动作日志可重放。示例游戏「骰子对决」。
+当前进度：**M2 完成** —— 骨架、持久化、CAS 并发、动作日志重放之上，游戏已经是真正的运行时插件：后台上传即发布、按版本锁定牌桌、老桌不受新版影响。示例游戏「骰子对决」。
 
 ## 快速开始
 
@@ -16,42 +16,54 @@ pnpm dev          # 同时起 server(8787) + web(5173)
 > 同一个昵称 = 同一个身份。想模拟两个人，用两个浏览器 profile 或无痕窗口。
 >
 > **数据库零配置**：默认用 PGlite（嵌入式 Postgres，WASM），数据落在 `.data/pg`。要连真 Postgres，设 `DATABASE_URL=postgres://user:pass@host/db` 即可，SQL 和迁移完全一样。
+>
+> **插件零配置**：服务启动时自动发布 `games/` 下的所有游戏，产物落在 `storage/plugins/`。
 
 ### 其它命令
 
 ```bash
 pnpm typecheck    # 全仓库类型检查
 pnpm build        # 构建前端到 apps/web/dist
-pnpm smoke        # 端到端冒烟：打完一局 + 中途重启恢复 + 日志重放校验 + 超时兜底
+pnpm smoke        # 端到端：对局 + 热发布新版 + 中途重启恢复 + 日志重放 + 超时
+pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 ```
 
 ## 架构
 
 一句话：**每局游戏 = 可序列化状态 + 纯函数 reducer + 事件日志**，进程里不留长驻游戏对象，所以换游戏代码不需要重启。
 
-详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md) 与 [docs/m1.md](docs/m1.md)。
+详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)。
 
 ```
 apps/
-  server/          Fastify + WS + 牌桌服务（CAS 并发）+ Postgres/PGlite 存储
+  server/          Fastify + WS + 牌桌服务（CAS 并发）+ 存储 + 插件宿主
     src/db/        数据库抽象：PGlite(本地) / pg(生产) + 迁移
-  web/             React 宿主：登录 / 大厅 / 牌桌 / 游戏组件注册表
+    src/pluginHost/  编译 / 静态检查 / 冒烟 / 版本注册表
+  web/             React 宿主：登录 / 大厅 / 牌桌 / 插件容器
+    src/host/      运行时加载 /plugins/<id>/<version>/client.js
 packages/
-  sdk/             插件契约 + 线上协议（前后端共用）
+  sdk/             插件契约（服务端 + 客户端）+ 线上协议
   engine/          纯函数引擎：状态机推进、动作校验、视图裁剪
 games/
-  dice/            示例插件：骰子对决
+  dice/            示例插件：manifest + 服务端规则 + 原生 DOM 客户端
 scripts/
-  smoke.mjs        端到端验证（对局 + 重启恢复 + 日志重放 + 超时）
+  smoke.mjs        端到端验证
+  pack-game.mjs    打包插件
 ```
 
 **分层纪律**：`packages/engine` 不得 import 任何 DB / socket；插件不得碰 DB / socket / 全局随机 / 系统时钟。
 
 ## 加一个游戏
 
-1. 复制 `games/dice` 到 `games/<你的游戏>`
-2. 改 `manifest`、`createState`、`states`、`actions`
-3. 在 `apps/server/src/games.ts` 注册服务端插件
-4. 在 `apps/web/src/games/registry.ts` 注册前端组件
+1. 复制 `games/dice` 到 `games/<你的游戏>`，改 `manifest.json`（id / 版本 / 人数）
+2. 写 `src/server.ts`（`GamePlugin`：状态机 + 纯 reducer + 视图裁剪）
+3. 写 `src/client.ts`（`GameClient`：`mount` / `update` / `unmount`，可以是原生 DOM、Canvas 或任意框架）
+4. 重启 `pnpm dev`（开发态自动发布），或者 `pnpm pack:game games/xxx` 后到后台 `POST /api/admin/plugins` 上传
 
-M2 会把这两处注册都换成运行时扫描，届时第 3、4 步就不需要了。
+**不需要改宿主任何代码**——旧的静态注册表已经删掉了。
+
+## 发布新版本
+
+改高 `manifest.json` 里的 `version`，然后上传。新桌用新版本，已经在跑的桌继续用旧版本直到结束（`tables.game_version` 锁死）。同一版本号覆盖内容会被拒绝，避免偷偷换掉进行中牌桌的规则。
+
+开发时想原地替换：`POST /api/admin/plugins/republish`（管理员）。

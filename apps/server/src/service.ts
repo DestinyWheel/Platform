@@ -18,7 +18,7 @@ import {
   RuleError,
 } from '@platform/engine';
 import type { EventBus } from './bus.js';
-import type { GameRegistry } from './games.js';
+import type { PluginHost } from './pluginHost/host.js';
 import { hashState } from './hash.js';
 import type { ActionLog, Store, TableRecord, UserRecord } from './store.js';
 
@@ -52,15 +52,25 @@ interface MutationOutcome<T> {
 export class TableService {
   constructor(
     private readonly store: Store,
-    private readonly games: GameRegistry,
+    private readonly host: PluginHost,
     private readonly bus: EventBus,
     private readonly onError: (error: unknown, tableId: string) => void = () => {},
   ) {}
 
-  private pluginOf(table: TableRecord): GamePlugin<any> {
-    const plugin = this.games.get(table.gameId);
-    if (!plugin) throw new ServiceError('unknown_game', `游戏未注册：${table.gameId}`);
-    return plugin;
+  /**
+   * 取这张桌锁定的插件版本。
+   * 注意用的是 table.gameVersion 而不是"当前最新版本"——这就是版本固定的落点。
+   */
+  private async pluginOf(table: TableRecord): Promise<GamePlugin<any>> {
+    try {
+      const loaded = await this.host.ensure(table.gameId, table.gameVersion);
+      return loaded.plugin;
+    } catch {
+      throw new ServiceError(
+        'plugin_missing',
+        `插件 ${table.gameId}@${table.gameVersion} 当前不可用`,
+      );
+    }
   }
 
   /**
@@ -96,18 +106,19 @@ export class TableService {
   /* ---------------------------------------------------------------- */
 
   async createTable(user: UserRecord, input: CreateTableInput): Promise<string> {
-    const plugin = this.games.get(input.gameId);
-    if (!plugin) throw new ServiceError('unknown_game', `没有这个游戏：${input.gameId}`);
+    const active = this.host.activeFor(input.gameId);
+    if (!active) throw new ServiceError('unknown_game', `没有这个游戏：${input.gameId}`);
 
-    const { min, max } = plugin.manifest.players;
+    const { min, max } = active.manifest.players;
     const requested = input.maxPlayers ?? max;
     const maxPlayers = Math.max(min, Math.min(max, Math.trunc(requested)));
 
     const now = Date.now();
     const record: TableRecord = {
       id: randomUUID(),
-      gameId: plugin.manifest.id,
-      gameVersion: plugin.manifest.version,
+      gameId: active.manifest.id,
+      // ★ 建桌这一刻锁定版本：之后发新版不会影响这一桌
+      gameVersion: active.version,
       hostId: user.id,
       status: 'lobby',
       players: [{ id: user.id, name: user.name, seat: 0, bot: false }],
@@ -150,11 +161,11 @@ export class TableService {
   }
 
   async startTable(tableId: string, userId: string): Promise<void> {
-    await this.withTable(tableId, (table) => {
+    await this.withTable(tableId, async (table) => {
       if (table.hostId !== userId) throw new ServiceError('not_host', '只有房主可以开始');
       if (table.status !== 'lobby') throw new ServiceError('already_started', '对局已经开始');
 
-      const plugin = this.pluginOf(table);
+      const plugin = await this.pluginOf(table);
       if (table.players.length < plugin.manifest.players.min) {
         throw new ServiceError('not_enough_players', `至少需要 ${plugin.manifest.players.min} 人`);
       }
@@ -197,14 +208,14 @@ export class TableService {
   /* ---------------------------------------------------------------- */
 
   async act(tableId: string, userId: string, action: AnyAction): Promise<void> {
-    await this.withTable(tableId, (table) => {
+    await this.withTable(tableId, async (table) => {
       if (table.status !== 'playing') throw new ServiceError('not_playing', '对局未开始或已结束');
       if (!table.state) throw new ServiceError('broken_table', '牌桌状态异常');
       if (!table.players.some((player) => player.id === userId)) {
         throw new ServiceError('not_seated', '你不在这一桌');
       }
 
-      const plugin = this.pluginOf(table);
+      const plugin = await this.pluginOf(table);
       const now = Date.now();
 
       let applied;
@@ -240,14 +251,14 @@ export class TableService {
 
     for (const candidate of expired) {
       try {
-        await this.withTable(candidate.id, (table) => {
+        await this.withTable(candidate.id, async (table) => {
           if (table.status !== 'playing' || !table.state) return { write: false, result: undefined };
           // 回调里重新判定：读表和写库之间玩家可能刚刚落子，deadline 已被推后
           if (table.deadlineAt === null || table.deadlineAt > Date.now()) {
             return { write: false, result: undefined };
           }
 
-          const plugin = this.pluginOf(table);
+          const plugin = await this.pluginOf(table);
           const at = Date.now();
           const applied = applyTimeout(plugin, table.state as any, at);
 
@@ -290,7 +301,7 @@ export class TableService {
     const table = await this.store.getTable(tableId);
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
-    const plugin = this.pluginOf(table);
+    const plugin = await this.pluginOf(table);
     const isPlayer = table.players.some((player) => player.id === viewerId);
 
     let view: PublicView | null = null;
@@ -327,12 +338,15 @@ export class TableService {
   async summaries(): Promise<TableSummary[]> {
     const tables = await this.store.listTables();
     return tables.map((table) => {
-      const plugin = this.games.get(table.gameId);
+      const gameName =
+        this.host.get(table.gameId, table.gameVersion)?.manifest.name ??
+        this.host.activeFor(table.gameId)?.manifest.name ??
+        table.gameId;
       const host = table.players.find((player) => player.id === table.hostId);
       return {
         id: table.id,
         gameId: table.gameId,
-        gameName: plugin?.manifest.name ?? table.gameId,
+        gameName,
         status: table.status,
         players: table.players.length,
         maxPlayers: table.maxPlayers,

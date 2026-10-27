@@ -9,7 +9,10 @@ import type { Db } from './types.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
-const MIGRATIONS = [{ version: 1, file: 'schema.sql' }];
+const MIGRATIONS = [
+  { version: 1, file: 'schema.sql' },
+  { version: 2, file: '002_plugins.sql' },
+];
 
 export interface DbOptions {
   /** PGlite 数据目录（仅本地模式用） */

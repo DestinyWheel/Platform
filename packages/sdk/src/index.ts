@@ -214,3 +214,11 @@ export interface AuthUser {
   id: PlayerId;
   name: string;
 }
+
+/* 前端插件契约（框架无关的 mount / update / unmount） */
+export type {
+  ClientPlayer,
+  ClientSnapshot,
+  GameClient,
+  GameClientContext,
+} from './client.js';

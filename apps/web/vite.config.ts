@@ -14,6 +14,8 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': { target: 'http://127.0.0.1:8787', changeOrigin: false },
+      // 插件产物由服务端托管，开发时也要走代理，才能和线上同一条路径
+      '/plugins': { target: 'http://127.0.0.1:8787', changeOrigin: false },
       '/ws': { target: 'ws://127.0.0.1:8787', ws: true },
     },
   },
