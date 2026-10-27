@@ -8,6 +8,9 @@ build/
 storage/plugins/
 *.tsbuildinfo
 
+# 本地数据库（PGlite 数据目录）
+.data/
+
 # env
 .env
 .env.local

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  AnyAction,
+  BaseState,
   Effect,
   GamePlugin,
   LogEntry,
@@ -17,10 +19,12 @@ import {
 } from '@platform/engine';
 import type { EventBus } from './bus.js';
 import type { GameRegistry } from './games.js';
-import type { Store, TableRecord, UserRecord } from './store.js';
+import { hashState } from './hash.js';
+import type { ActionLog, Store, TableRecord, UserRecord } from './store.js';
 
 const DEFAULT_TURN_MS = 30_000;
 const MAX_LOG = 200;
+const MAX_CAS_ATTEMPTS = 5;
 
 export class ServiceError extends Error {
   constructor(
@@ -32,48 +36,59 @@ export class ServiceError extends Error {
   }
 }
 
-/** 同一张桌的写操作串行化（内存锁；多实例时换成 DB CAS） */
-class Mutex {
-  private tail: Promise<unknown> = Promise.resolve();
-
-  run<T>(task: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(task, task);
-    this.tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
-}
-
 export interface CreateTableInput {
   gameId: string;
   maxPlayers?: number;
   options?: Record<string, unknown>;
 }
 
-export class TableService {
-  private locks = new Map<string, Mutex>();
+/** 一次写操作的结果：write=false 表示这次不改库（例如并发下已被别人推进） */
+interface MutationOutcome<T> {
+  write: boolean;
+  result: T;
+  log?: ActionLog;
+}
 
+export class TableService {
   constructor(
     private readonly store: Store,
     private readonly games: GameRegistry,
     private readonly bus: EventBus,
+    private readonly onError: (error: unknown, tableId: string) => void = () => {},
   ) {}
-
-  private lock(tableId: string): Mutex {
-    let mutex = this.locks.get(tableId);
-    if (!mutex) {
-      mutex = new Mutex();
-      this.locks.set(tableId, mutex);
-    }
-    return mutex;
-  }
 
   private pluginOf(table: TableRecord): GamePlugin<any> {
     const plugin = this.games.get(table.gameId);
     if (!plugin) throw new ServiceError('unknown_game', `游戏未注册：${table.gameId}`);
     return plugin;
+  }
+
+  /**
+   * 单桌写操作统一入口：读 → 改 → CAS 写。
+   *
+   * 冲突时不加锁等待，而是重新读一遍再算一次。因为 reducer 是纯函数，
+   * 重算的代价很低；也因为这样，多实例部署时天然不会互相覆盖。
+   */
+  private async withTable<T>(
+    tableId: string,
+    mutate: (table: TableRecord) => Promise<MutationOutcome<T>> | MutationOutcome<T>,
+  ): Promise<T> {
+    for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
+      const table = await this.store.getTable(tableId);
+      if (!table) throw new ServiceError('no_table', '牌桌不存在');
+
+      const expectedSeq = table.seq;
+      const outcome = await mutate(table);
+      if (!outcome.write) return outcome.result;
+
+      const saved = await this.store.updateTable({ table, expectedSeq, log: outcome.log });
+      if (saved) {
+        this.bus.publish(tableId);
+        return outcome.result;
+      }
+      // 被别人抢先写了：丢弃这次的计算结果，重读重算
+    }
+    throw new ServiceError('conflict', '这张桌上同时在发生太多操作，请稍后重试');
   }
 
   /* ---------------------------------------------------------------- */
@@ -112,24 +127,30 @@ export class TableService {
   }
 
   async joinTable(tableId: string, user: UserRecord): Promise<void> {
-    await this.lock(tableId).run(async () => {
-      const table = await this.store.getTable(tableId);
-      if (!table) throw new ServiceError('no_table', '牌桌不存在');
-      if (table.players.some((p) => p.id === user.id)) return;
-      if (table.status !== 'lobby') throw new ServiceError('already_started', '对局已经开始，无法加入');
-      if (table.players.length >= table.maxPlayers) throw new ServiceError('table_full', '牌桌已满');
+    await this.withTable(tableId, (table) => {
+      if (table.players.some((player) => player.id === user.id)) {
+        return { write: false, result: undefined };
+      }
+      if (table.status !== 'lobby') {
+        throw new ServiceError('already_started', '对局已经开始，无法加入');
+      }
+      if (table.players.length >= table.maxPlayers) {
+        throw new ServiceError('table_full', '牌桌已满');
+      }
 
-      table.players.push({ id: user.id, name: user.name, seat: table.players.length, bot: false });
+      table.players.push({
+        id: user.id,
+        name: user.name,
+        seat: table.players.length,
+        bot: false,
+      });
       table.seq += 1;
-      await this.store.saveTable(table);
-      this.bus.publish(tableId);
+      return { write: true, result: undefined };
     });
   }
 
   async startTable(tableId: string, userId: string): Promise<void> {
-    await this.lock(tableId).run(async () => {
-      const table = await this.store.getTable(tableId);
-      if (!table) throw new ServiceError('no_table', '牌桌不存在');
+    await this.withTable(tableId, (table) => {
       if (table.hostId !== userId) throw new ServiceError('not_host', '只有房主可以开始');
       if (table.status !== 'lobby') throw new ServiceError('already_started', '对局已经开始');
 
@@ -139,13 +160,15 @@ export class TableService {
       }
 
       const now = Date.now();
-      const { state, effects } = createInitialState(plugin, {
-        players: table.players.map((p) => p.id),
+      const seed = Math.floor(Math.random() * 0xffffffff);
+      const setup = {
+        players: table.players.map((player) => player.id),
         options: table.options,
         // 建局是唯一允许"真随机"的地方；之后一切随机都走 state.rngSeed
-        seed: Math.floor(Math.random() * 0xffffffff),
+        seed,
         now,
-      });
+      };
+      const { state, effects } = createInitialState(plugin, setup);
 
       table.state = state;
       table.status = 'playing';
@@ -153,8 +176,19 @@ export class TableService {
       table.seq += 1;
       this.appendLogs(table, effects, now);
       this.refreshDeadline(table, plugin, now);
-      await this.store.saveTable(table);
-      this.bus.publish(tableId);
+
+      return {
+        write: true,
+        result: undefined,
+        log: {
+          actor: userId,
+          kind: 'start',
+          // 把建局参数一并落库，回放时才能重建出完全相同的初始状态
+          action: { seed, players: setup.players, options: setup.options },
+          effects,
+          stateHash: hashState(state),
+        },
+      };
     });
   }
 
@@ -162,67 +196,89 @@ export class TableService {
   /* 动作                                                              */
   /* ---------------------------------------------------------------- */
 
-  async act(tableId: string, userId: string, action: { type: string; payload?: unknown }): Promise<void> {
-    await this.lock(tableId).run(async () => {
-      const table = await this.store.getTable(tableId);
-      if (!table) throw new ServiceError('no_table', '牌桌不存在');
+  async act(tableId: string, userId: string, action: AnyAction): Promise<void> {
+    await this.withTable(tableId, (table) => {
       if (table.status !== 'playing') throw new ServiceError('not_playing', '对局未开始或已结束');
       if (!table.state) throw new ServiceError('broken_table', '牌桌状态异常');
-      if (!table.players.some((p) => p.id === userId)) {
+      if (!table.players.some((player) => player.id === userId)) {
         throw new ServiceError('not_seated', '你不在这一桌');
       }
 
       const plugin = this.pluginOf(table);
       const now = Date.now();
-      let result;
+
+      let applied;
       try {
-        result = applyAction(plugin, table.state as any, userId, action, now);
-      } catch (err) {
-        if (err instanceof RuleError) throw new ServiceError(err.code, err.message);
-        throw err;
+        applied = applyAction(plugin, table.state as any, userId, action, now);
+      } catch (error) {
+        if (error instanceof RuleError) throw new ServiceError(error.code, error.message);
+        throw error;
       }
 
-      table.state = result.state;
+      table.state = applied.state;
       table.seq += 1;
-      this.appendLogs(table, result.effects, now);
+      this.appendLogs(table, applied.effects, now);
       this.settle(table, plugin, now);
-      await this.store.saveTable(table);
-      this.bus.publish(tableId);
+
+      return {
+        write: true,
+        result: undefined,
+        log: {
+          actor: userId,
+          kind: 'action',
+          action,
+          effects: applied.effects,
+          stateHash: hashState(applied.state),
+        },
+      };
     });
   }
 
-  /** 由定时器驱动：到点替当前玩家走一步 */
+  /** 由定时器驱动：到点替当前玩家走一步。多实例下每个实例都能扫，靠 CAS 去重。 */
   async tick(now: number): Promise<void> {
-    const tables = await this.store.listTables();
+    const expired = await this.store.listExpired(now);
 
-    for (const candidate of tables) {
-      if (candidate.status !== 'playing') continue;
-      if (candidate.deadlineAt === null || candidate.deadlineAt > now) continue;
+    for (const candidate of expired) {
+      try {
+        await this.withTable(candidate.id, (table) => {
+          if (table.status !== 'playing' || !table.state) return { write: false, result: undefined };
+          // 回调里重新判定：读表和写库之间玩家可能刚刚落子，deadline 已被推后
+          if (table.deadlineAt === null || table.deadlineAt > Date.now()) {
+            return { write: false, result: undefined };
+          }
 
-      await this.lock(candidate.id).run(async () => {
-        const table = await this.store.getTable(candidate.id);
-        if (!table || table.status !== 'playing' || !table.state) return;
-        // 二次确认：玩家可能刚刚落子，deadline 已被推后
-        if (table.deadlineAt === null || table.deadlineAt > Date.now()) return;
+          const plugin = this.pluginOf(table);
+          const at = Date.now();
+          const applied = applyTimeout(plugin, table.state as any, at);
 
-        const plugin = this.pluginOf(table);
-        const at = Date.now();
-        const result = applyTimeout(plugin, table.state as any, at);
+          if (!applied) {
+            // 插件没有兜底策略，停掉计时器避免空转
+            table.deadlineAt = null;
+            table.seq += 1;
+            return { write: true, result: undefined };
+          }
 
-        if (!result) {
-          // 插件没有兜底策略，只能把计时器停掉，避免空转
-          table.deadlineAt = null;
-          await this.store.saveTable(table);
-          return;
-        }
+          table.state = applied.state;
+          table.seq += 1;
+          this.appendLogs(table, applied.effects, at);
+          this.settle(table, plugin, at);
 
-        table.state = result.state;
-        table.seq += 1;
-        this.appendLogs(table, result.effects, at);
-        this.settle(table, plugin, at);
-        await this.store.saveTable(table);
-        this.bus.publish(table.id);
-      });
+          return {
+            write: true,
+            result: undefined,
+            log: {
+              actor: null,
+              kind: 'timeout',
+              action: null,
+              effects: applied.effects,
+              stateHash: hashState(applied.state),
+            },
+          };
+        });
+      } catch (error) {
+        // 单张桌出错不能拖垮扫描循环
+        this.onError(error, candidate.id);
+      }
     }
   }
 
@@ -235,7 +291,7 @@ export class TableService {
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
     const plugin = this.pluginOf(table);
-    const isPlayer = table.players.some((p) => p.id === viewerId);
+    const isPlayer = table.players.some((player) => player.id === viewerId);
 
     let view: PublicView | null = null;
     let activePlayer: string | null = null;
@@ -258,15 +314,13 @@ export class TableService {
       minPlayers: plugin.manifest.players.min,
       maxPlayers: table.maxPlayers,
       options: table.options,
-      players: table.players.map((p) => ({ ...p })),
+      players: table.players.map((player) => ({ ...player })),
       you: { id: viewerId, isPlayer, isHost: table.hostId === viewerId },
       view,
       legal,
       activePlayer,
       deadlineAt: table.deadlineAt,
-      log: table.log
-        .filter((entry) => entry.to === 'all' || entry.to.includes(viewerId))
-        .slice(-80),
+      log: table.log.filter((entry) => entry.to === 'all' || entry.to.includes(viewerId)).slice(-80),
     };
   }
 
@@ -274,7 +328,7 @@ export class TableService {
     const tables = await this.store.listTables();
     return tables.map((table) => {
       const plugin = this.games.get(table.gameId);
-      const host = table.players.find((p) => p.id === table.hostId);
+      const host = table.players.find((player) => player.id === table.hostId);
       return {
         id: table.id,
         gameId: table.gameId,
@@ -295,14 +349,13 @@ export class TableService {
   private appendLogs(table: TableRecord, effects: Effect[], now: number): void {
     for (const effect of effects) {
       if (effect.type !== 'log') continue;
-      const entry: LogEntry = {
+      table.log.push({
         seq: table.log.length + 1,
         key: effect.key,
         args: effect.args,
         to: effect.to ?? 'all',
         at: now,
-      };
-      table.log.push(entry);
+      });
     }
     if (table.log.length > MAX_LOG) table.log.splice(0, table.log.length - MAX_LOG);
   }

@@ -1,12 +1,12 @@
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import { z, ZodError } from 'zod';
-import type { AuthUser } from '@platform/sdk';
 import { bearerFrom, signToken, verifyToken } from './auth.js';
 import { EventBus } from './bus.js';
+import { createDb, migrate, type Db } from './db/index.js';
 import { createRegistry } from './games.js';
 import { ServiceError, TableService } from './service.js';
-import { MemoryStore } from './store.js';
+import { PgStore, type UserRecord } from './store.js';
 import { registerWebSocket } from './ws.js';
 
 const loginSchema = z.object({
@@ -23,7 +23,12 @@ const createTableSchema = z.object({
   options: z.record(z.unknown()).optional(),
 });
 
-export async function buildApp(): Promise<FastifyInstance> {
+export interface AppOptions {
+  /** 注入外部数据库（测试用）；不传则按 DATABASE_URL / PGlite 自动创建 */
+  db?: Db;
+}
+
+export async function buildApp(options: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
@@ -32,20 +37,28 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   await app.register(cors, { origin: true });
 
-  const store = new MemoryStore();
+  const ownsDb = options.db === undefined;
+  const db = options.db ?? (await createDb());
+  await migrate(db);
+
+  const store = new PgStore(db);
   const games = createRegistry();
   const bus = new EventBus();
-  const service = new TableService(store, games, bus);
+  const service = new TableService(store, games, bus, (error, tableId) => {
+    app.log.error({ err: error, tableId }, '超时处理失败');
+  });
 
-  const requireUser = (request: FastifyRequest): AuthUser => {
-    const user = verifyToken(bearerFrom(request.headers.authorization));
-    if (!user) throw new ServiceError('unauthorized', '请先登录');
+  const requireUser = async (request: FastifyRequest): Promise<UserRecord> => {
+    const auth = verifyToken(bearerFrom(request.headers.authorization));
+    if (!auth) throw new ServiceError('unauthorized', '请先登录');
+    const user = await store.getUser(auth.id);
+    if (!user) throw new ServiceError('unauthorized', '用户不存在，请重新登录');
     return user;
   };
 
   /* ----------------------------- REST ----------------------------- */
 
-  app.get('/api/health', async () => ({ ok: true, uptime: process.uptime() }));
+  app.get('/api/health', async () => ({ ok: true, db: db.kind, uptime: process.uptime() }));
 
   app.post('/api/auth/login', async (request) => {
     const { name } = loginSchema.parse(request.body);
@@ -57,8 +70,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   app.get('/api/me', async (request) => {
-    const user = requireUser(request);
-    return { user };
+    const user = await requireUser(request);
+    return { user: { id: user.id, name: user.name } };
   });
 
   app.get('/api/games', async () => ({ games: games.list() }));
@@ -66,32 +79,24 @@ export async function buildApp(): Promise<FastifyInstance> {
   app.get('/api/tables', async () => ({ tables: await service.summaries() }));
 
   app.post('/api/tables', async (request) => {
-    const user = requireUser(request);
+    const user = await requireUser(request);
     const input = createTableSchema.parse(request.body);
-    const id = await service.createTable(
-      { id: user.id, name: user.name, createdAt: Date.now() },
-      input,
-    );
-    return { id };
+    return { id: await service.createTable(user, input) };
   });
 
   app.get<{ Params: { id: string } }>('/api/tables/:id', async (request) => {
-    const user = requireUser(request);
+    const user = await requireUser(request);
     return { snapshot: await service.snapshot(request.params.id, user.id) };
   });
 
   app.post<{ Params: { id: string } }>('/api/tables/:id/join', async (request) => {
-    const user = requireUser(request);
-    await service.joinTable(request.params.id, {
-      id: user.id,
-      name: user.name,
-      createdAt: Date.now(),
-    });
+    const user = await requireUser(request);
+    await service.joinTable(request.params.id, user);
     return { ok: true };
   });
 
   app.post<{ Params: { id: string } }>('/api/tables/:id/start', async (request) => {
-    const user = requireUser(request);
+    const user = await requireUser(request);
     await service.startTable(request.params.id, user.id);
     return { ok: true };
   });
@@ -134,6 +139,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   app.addHook('onClose', async () => {
     clearInterval(timer);
+    if (ownsDb) await db.close();
   });
 
   return app;
