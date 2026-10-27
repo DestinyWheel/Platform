@@ -1,0 +1,19 @@
+{
+  "name": "platform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.28.5",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:server": "pnpm --filter @platform/server dev",
+    "dev:web": "pnpm --filter @platform/web dev",
+    "build": "pnpm --filter @platform/web build",
+    "typecheck": "pnpm -r typecheck",
+    "smoke": "tsx scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

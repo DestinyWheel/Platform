@@ -1,0 +1,8 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - 'games/*'
+
+# 允许 esbuild 运行安装脚本（它需要据此校验/落位二进制）
+allowBuilds:
+  esbuild: true
