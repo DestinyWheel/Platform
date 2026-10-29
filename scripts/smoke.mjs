@@ -26,7 +26,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const { buildApp } = await import('../apps/server/src/app.ts');
-const { createDb } = await import('../apps/server/src/db/index.ts');
+const { createDb, migrate } = await import('../apps/server/src/db/index.ts');
+const { PgStore } = await import('../apps/server/src/store.ts');
 const { hashState } = await import('../apps/server/src/hash.ts');
 const { createInitialState, applyAction } = await import('../packages/engine/src/index.ts');
 
@@ -539,6 +540,72 @@ assert.ok(
   '回放应按需重新加载旧版本（否则第二次回收不会再次命中它）',
 );
 console.log('✓ 按需重载：回放触发重新加载，内容完全一致');
+
+/* ------------------------------ 限流 / 指标 / 备份 ------------------------------ */
+
+console.log('\n▶ 阶段八：限流 / 指标 / 备份与恢复');
+
+// 连续建桌直到被 429
+let rateLimited = 0;
+for (let attempt = 0; attempt < 40; attempt += 1) {
+  try {
+    await api2('/tables', {
+      token: alice.token,
+      method: 'POST',
+      body: { gameId: 'dice', maxPlayers: 2 },
+    });
+  } catch (error) {
+    if (error.status === 429) {
+      rateLimited += 1;
+      break;
+    }
+    throw error;
+  }
+}
+assert.ok(rateLimited > 0, '连续建桌应该触发限流');
+console.log('✓ 限流生效：连续建桌被 429 拦下');
+
+// 指标
+const metricsRes = await fetch(`${server2.base}/api/metrics`, {
+  headers: { authorization: `Bearer ${alice.token}` },
+});
+assert.equal(metricsRes.status, 200, '指标接口应可访问');
+const metricsText = await metricsRes.text();
+assert.ok(metricsText.includes('platform_http_requests'), '应包含请求计数');
+assert.ok(metricsText.includes('platform_workers_loaded'), '应包含 worker 数');
+assert.ok(metricsText.includes('platform_tables_playing'), '应包含牌桌状态');
+console.log(`✓ 指标可用（${metricsText.split('\n').filter(Boolean).length} 项）`);
+
+// 备份
+const backup = await api2('/admin/backup', { token: alice.token, method: 'POST' });
+assert.ok(backup.counts.users >= 2, '备份应包含用户');
+assert.ok(backup.counts.tables >= 5, '备份应包含牌桌');
+assert.ok(backup.counts.match_actions > 0, '备份应包含动作日志');
+
+const { gunzipSync } = await import('node:zlib');
+const dump = JSON.parse(gunzipSync(readFileSync(backup.file)).toString('utf8'));
+assert.equal(dump.tables.tables.length, backup.counts.tables, '落盘内容应与统计一致');
+console.log(
+  `✓ 备份完成：${(backup.bytes / 1024).toFixed(1)} KB，` +
+    Object.entries(backup.counts)
+      .map(([table, count]) => `${table}=${count}`)
+      .join(' '),
+);
+
+// 恢复到一个全新的数据目录，并逐个比对
+const restoreDir = path.join(workDir, 'restore');
+const restoreDb = await createDb({ dataDir: restoreDir });
+await migrate(restoreDb);
+const restoreStore = new PgStore(restoreDb);
+const restoredCounts = await restoreStore.importAll(dump.tables);
+assert.deepEqual(restoredCounts, backup.counts, '恢复后的行数应与备份一致');
+
+const original = await db2.query('SELECT seq, state FROM tables WHERE id = $1', [tableA]);
+const restored = await restoreDb.query('SELECT seq, state FROM tables WHERE id = $1', [tableA]);
+assert.equal(restored[0].seq, original[0].seq, '恢复后 seq 应一致');
+assert.equal(hashState(restored[0].state), hashState(original[0].state), '恢复后局面哈希应一致');
+await restoreDb.close();
+console.log('✓ 恢复校验：行数一致，牌桌局面哈希一致');
 
 /* ------------------------------ 收尾 ------------------------------ */
 

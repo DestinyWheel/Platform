@@ -2,7 +2,7 @@
 
 私人桌游平台（BGA 风格），游戏以插件形式存在，**新增/升级游戏不需要重启服务，也不需要重新发布前端**。
 
-当前进度：**M3 完成** —— 骨架、持久化、CAS 并发、插件热加载之上，补齐了体验层：**对局回放、牌桌聊天、观战人数、战绩与 Elo 排行榜**。示例游戏「骰子对决」。
+当前进度：**M4 完成** —— 骨架、持久化、CAS 并发、插件热加载（含 worker 隔离）、回放/聊天/观战/战绩/Elo 之上，补齐了运维层：**限流、结构化日志、备份恢复、指标**。
 
 ## 快速开始
 
@@ -24,7 +24,7 @@ pnpm dev          # 同时起 server(8787) + web(5173)
 ```bash
 pnpm typecheck    # 全仓库类型检查
 pnpm build        # 构建前端到 apps/web/dist
-pnpm smoke        # 端到端：对局 + 热发布新版 + 重启恢复 + 聊天/战绩/回放 + 超时
+pnpm smoke        # 端到端：八段，从对局到限流/备份全跑一遍
 pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 ```
 
@@ -72,6 +72,20 @@ scripts/
 | 观战 | 不坐下也能看，顶栏显示当前有几个人在看 |
 | 战绩 | 大厅里的「我的战绩」：场次 / 胜场 / 胜率，附最近对局（可直接跳回放） |
 | Elo | 每人每个游戏一个分数，默认 1500，零和；开桌时 `ranked: false` 可打休闲局不计分 |
+
+## 运维
+
+| 做什么 | 怎么做 |
+|---|---|
+| 健康检查 | `GET /api/health` —— db 类型、uptime、内存、worker 数、各状态牌桌数 |
+| 指标 | `GET /api/metrics`（管理员）—— Prometheus 文本格式 |
+| 备份 | `POST /api/admin/backup`（管理员）—— 整库导出到 `storage/backups/*.json.gz` |
+| 恢复 | `pnpm tsx scripts/restore.mjs <备份文件> [--data-dir <目录>]`（**破坏性**） |
+| 回收插件 | `POST /api/admin/plugins/gc` —— 卸载无人在用的旧版本 worker |
+
+限流默认全开：登录按 IP、建桌/上传按用户、聊天和动作按 WS 连接。超限返回 `429` + `retry-after`。
+
+细节见 [docs/m4.md](docs/m4.md)。
 
 ## 加一个游戏
 

@@ -1,6 +1,8 @@
-import { mkdir, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
@@ -8,6 +10,8 @@ import { z, ZodError } from 'zod';
 import { bearerFrom, signToken, verifyToken } from './auth.js';
 import { EventBus } from './bus.js';
 import { createDb, migrate, type Db } from './db/index.js';
+import { Limiters, RateLimiter, RateLimitExceeded, checkLimit } from './limits.js';
+import { Metrics } from './metrics.js';
 import { PluginHost } from './pluginHost/host.js';
 import { publishDirectory, publishLocalGames } from './pluginHost/publish.js';
 import { PluginError } from './pluginHost/types.js';
@@ -41,6 +45,8 @@ export interface AppOptions {
 export async function buildApp(options: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
+    // 每个请求一个 id，日志里能串起一次完整调用
+    genReqId: () => randomUUID(),
     // 插件上传包可能几百 KB，放宽一点
     bodyLimit: 8 * 1024 * 1024,
   });
@@ -50,6 +56,33 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   const ownsDb = options.db === undefined;
   const db = options.db ?? (await createDb());
   await migrate(db);
+
+  const limits = new Limiters();
+  const metrics = new Metrics();
+  /** 兜底：按 IP 的粗粒度限流，防止有人在别的接口上刷 */
+  const ipLimiter = new RateLimiter(300, 5);
+
+  app.addHook('onRequest', async (request, reply) => {
+    const url = request.url;
+    // 静态插件产物和健康检查不算
+    if (url.startsWith('/plugins/') || url === '/api/health' || url === '/api/metrics') return;
+
+    const result = ipLimiter.take(request.ip);
+    if (!result.ok) {
+      metrics.inc('http.rate_limited');
+      return reply
+        .code(429)
+        .header('retry-after', Math.ceil(result.retryAfterMs / 1000))
+        .send({ code: 'rate_limited', message: '请求太频繁了，慢一点' });
+    }
+  });
+
+  app.addHook('onResponse', async (_request, reply) => {
+    metrics.inc('http.requests');
+    if (reply.statusCode >= 500) metrics.inc('http.errors');
+    if (reply.statusCode === 401) metrics.inc('http.unauthorized');
+    if (reply.statusCode === 429) metrics.inc('http.rate_limited');
+  });
 
   const storageRoot = path.resolve(
     options.storageRoot ?? process.env.PLUGIN_DIR ?? path.join(REPO_ROOT, 'storage', 'plugins'),
@@ -107,9 +140,57 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   /* ----------------------------- REST ----------------------------- */
 
-  app.get('/api/health', async () => ({ ok: true, db: db.kind, uptime: process.uptime() }));
+  app.get('/api/health', async () => ({
+    ok: true,
+    db: db.kind,
+    uptime: Math.round(process.uptime()),
+    memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
+    workers: host.loadedVersions().length,
+    tables: await store.tableStatusCounts(),
+  }));
+
+  /** Prometheus 风格指标，管理员可见 */
+  app.get('/api/metrics', async (request, reply) => {
+    await requireAdmin(request);
+    const tables = await store.tableStatusCounts();
+    const memory = process.memoryUsage();
+
+    reply.type('text/plain; version=0.0.4; charset=utf-8');
+    return metrics.toPrometheus({
+      uptime_seconds: Math.round(process.uptime()),
+      memory_rss_bytes: memory.rss,
+      memory_heap_used_bytes: memory.heapUsed,
+      workers_loaded: host.loadedVersions().length,
+      tables_playing: tables.playing ?? 0,
+      tables_lobby: tables.lobby ?? 0,
+      tables_finished: tables.finished ?? 0,
+      limit_buckets: ipLimiter.size,
+    });
+  });
+
+  /** 备份：整库导出成 gzip JSON，落到 storage/backups/ */
+  app.post('/api/admin/backup', async (request) => {
+    await requireAdmin(request);
+    const dump = await store.exportAll();
+    const payload = { version: 1, createdAt: Date.now(), db: db.kind, tables: dump };
+
+    const backupDir = path.join(path.dirname(storageRoot), 'backups');
+    await mkdir(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const file = path.join(backupDir, `${stamp}.json.gz`);
+    const buffer = gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
+    await writeFile(file, buffer);
+
+    metrics.inc('backup.created');
+    return {
+      file,
+      bytes: buffer.length,
+      counts: Object.fromEntries(Object.entries(dump).map(([table, rows]) => [table, rows.length])),
+    };
+  });
 
   app.post('/api/auth/login', async (request) => {
+    checkLimit(limits.login.take(request.ip));
     const { name } = loginSchema.parse(request.body);
     const user = await store.findOrCreateUser(name);
     return {
@@ -129,8 +210,12 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   app.post('/api/tables', async (request) => {
     const user = await requireUser(request);
+    checkLimit(limits.createTable.take(user.id));
     const input = createTableSchema.parse(request.body);
-    return { id: await service.createTable(user, input) };
+    const id = await service.createTable(user, input);
+    metrics.inc('tables.created');
+    request.log.info({ userId: user.id, tableId: id, gameId: input.gameId }, '建桌');
+    return { id };
   });
 
   app.get<{ Params: { id: string } }>('/api/tables/:id', async (request) => {
@@ -147,6 +232,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   app.post<{ Params: { id: string } }>('/api/tables/:id/start', async (request) => {
     const user = await requireUser(request);
     await service.startTable(request.params.id, user.id);
+    metrics.inc('tables.started');
+    request.log.info({ userId: user.id, tableId: request.params.id }, '开局');
     return { ok: true };
   });
 
@@ -188,6 +275,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   app.post('/api/admin/plugins', async (request) => {
     const admin = await requireAdmin(request);
+    checkLimit(limits.upload.take(admin.id));
     const body = request.body;
 
     if (!Buffer.isBuffer(body) || body.length === 0) {
@@ -202,6 +290,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         { activate: true },
       );
       app.log.info({ admin: admin.name, game: record.gameId, version: record.version }, '插件已上传');
+      metrics.inc('plugin.published');
       return { gameId: record.gameId, version: record.version, status: record.status };
     } finally {
       await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
@@ -240,6 +329,13 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   /* ----------------------------- 错误处理 ----------------------------- */
 
   app.setErrorHandler((error, request, reply) => {
+    if (error instanceof RateLimitExceeded) {
+      const seconds = Math.max(1, Math.ceil(error.retryAfterMs / 1000));
+      return reply
+        .code(429)
+        .header('retry-after', seconds)
+        .send({ code: 'rate_limited', message: `操作太频繁，${seconds} 秒后再试` });
+    }
     if (error instanceof ServiceError) {
       const status =
         error.code === 'unauthorized' ? 401 : error.code === 'forbidden' ? 403 : 400;
@@ -276,7 +372,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   /* ----------------------------- WebSocket ----------------------------- */
 
-  await registerWebSocket(app, service, bus, presence);
+  await registerWebSocket(app, service, bus, presence, { limits, metrics });
 
   /* ----------------------------- 超时调度 ----------------------------- */
 
@@ -285,8 +381,13 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   }, 1000);
   timer.unref?.();
 
+  // 定期清掉闲置的限流桶，避免长期运行后内存缓慢上涨
+  const sweeper = setInterval(() => limits.sweep(), 5 * 60_000);
+  sweeper.unref?.();
+
   app.addHook('onClose', async () => {
     clearInterval(timer);
+    clearInterval(sweeper);
     await host.closeAll();
     if (ownsDb) await db.close();
   });

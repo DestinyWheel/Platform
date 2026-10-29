@@ -4,8 +4,15 @@ import type { ClientMessage, ServerMessage } from '@platform/sdk';
 import { randomUUID } from 'node:crypto';
 import { verifyToken } from './auth.js';
 import type { EventBus } from './bus.js';
+import type { Limiters } from './limits.js';
+import type { Metrics } from './metrics.js';
 import type { Presence } from './presence.js';
 import { ServiceError, type TableService } from './service.js';
+
+export interface WebSocketDeps {
+  limits: Limiters;
+  metrics: Metrics;
+}
 
 /**
  * WebSocket 网关：一条连接可以订阅多张桌。
@@ -18,6 +25,7 @@ export async function registerWebSocket(
   service: TableService,
   bus: EventBus,
   presence: Presence,
+  deps: WebSocketDeps,
 ): Promise<void> {
   await app.register(websocket);
 
@@ -26,12 +34,16 @@ export async function registerWebSocket(
     const user = verifyToken(url.searchParams.get('token'));
 
     if (!user) {
+      deps.metrics.inc('ws.unauthorized');
       socket.close(4401, 'unauthorized');
       return;
     }
 
+    const { limits, metrics } = deps;
     const subscriptions = new Map<string, () => void>();
     const connectionId = randomUUID();
+    metrics.add('ws.connections', 1);
+    request.log.info({ userId: user.id, connectionId }, 'ws 连接建立');
 
     const send = (msg: ServerMessage): void => {
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
@@ -74,8 +86,14 @@ export async function registerWebSocket(
       type: string,
       payload: unknown,
     ): Promise<void> => {
+      if (!limits.action.take(user.id).ok) {
+        metrics.inc('ws.rate_limited');
+        send({ t: 'error', code: 'rate_limited', message: '操作太频繁，慢一点' });
+        return;
+      }
       try {
         await service.act(tableId, user.id, { type, payload });
+        metrics.inc('ws.actions');
       } catch (err) {
         if (err instanceof ServiceError) {
           send({ t: 'error', code: err.code, message: err.message });
@@ -87,8 +105,14 @@ export async function registerWebSocket(
     };
 
     const handleChat = async (tableId: string, text: string): Promise<void> => {
+      if (!limits.chat.take(user.id).ok) {
+        metrics.inc('ws.rate_limited');
+        send({ t: 'error', code: 'rate_limited', message: '说话太快了，歇一下' });
+        return;
+      }
       try {
         await service.chat(tableId, user, text);
+        metrics.inc('ws.chat');
       } catch (err) {
         if (err instanceof ServiceError) {
           send({ t: 'error', code: err.code, message: err.message });
@@ -130,6 +154,8 @@ export async function registerWebSocket(
     });
 
     socket.on('close', () => {
+      metrics.add('ws.connections', -1);
+      request.log.info({ userId: user.id, connectionId }, 'ws 连接关闭');
       for (const tableId of subscriptions.keys()) presence.leave(tableId, connectionId);
       for (const off of subscriptions.values()) off();
       subscriptions.clear();

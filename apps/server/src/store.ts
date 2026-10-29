@@ -109,6 +109,11 @@ export interface Store {
     gameId: string,
     limit: number,
   ): Promise<{ userId: string; name: string; rating: number; games: number }[]>;
+
+  /* ------------------------- 备份 / 恢复 ------------------------- */
+  exportAll(): Promise<Record<string, Record<string, unknown>[]>>;
+  importAll(dump: Record<string, Record<string, unknown>[]>): Promise<Record<string, number>>;
+  tableStatusCounts(): Promise<Record<string, number>>;
 }
 
 export interface ActionRow {
@@ -587,7 +592,68 @@ export class PgStore implements Store {
       games: Number(row.games),
     }));
   }
+
+  /* ------------------------- 备份 / 恢复 ------------------------- */
+
+  async exportAll(): Promise<Record<string, Record<string, unknown>[]>> {
+    const dump: Record<string, Record<string, unknown>[]> = {};
+    for (const table of DUMP_TABLES) {
+      dump[table] = await this.db.query(`SELECT * FROM ${table}`);
+    }
+    return dump;
+  }
+
+  async importAll(
+    dump: Record<string, Record<string, unknown>[]>,
+  ): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+
+    // 先清空（子表在前，虽然目前没有外键约束）
+    for (const table of [...DUMP_TABLES].reverse()) {
+      await this.db.execute(`DELETE FROM ${table}`);
+    }
+
+    for (const table of DUMP_TABLES) {
+      const rows = dump[table] ?? [];
+      for (const row of rows) {
+        const columns = Object.keys(row);
+        const placeholders = columns.map((_, index) => `$${index + 1}`).join(', ');
+        const values = columns.map((column) => {
+          const value = row[column];
+          // jsonb 列直接传对象，驱动序列化行为不一致，统一转成字符串更稳
+          return value !== null && typeof value === 'object' ? JSON.stringify(value) : value;
+        });
+        await this.db.execute(
+          `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`,
+          values,
+        );
+      }
+      counts[table] = rows.length;
+    }
+
+    return counts;
+  }
+
+  async tableStatusCounts(): Promise<Record<string, number>> {
+    const rows = await this.db.query<{ status: string; n: number }>(
+      'SELECT status, count(*)::int AS n FROM tables GROUP BY status',
+    );
+    const counts: Record<string, number> = {};
+    for (const row of rows) counts[row.status] = Number(row.n);
+    return counts;
+  }
 }
+
+/** 备份时按这个顺序导出；恢复时按反序清空 */
+const DUMP_TABLES = [
+  'users',
+  'game_versions',
+  'tables',
+  'match_actions',
+  'table_chat',
+  'match_results',
+  'ratings',
+] as const;
 
 interface GameVersionRow {
   game_id: string;
