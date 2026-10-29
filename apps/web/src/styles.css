@@ -664,3 +664,20 @@ select.ghost {
 .replay-controls button {
   min-width: 44px;
 }
+
+/* ---------------- 人机开关 ---------------- */
+
+.bot-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
+.bot-toggle input {
+  width: auto;
+  accent-color: var(--accent);
+}

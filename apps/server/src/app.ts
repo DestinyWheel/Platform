@@ -388,6 +388,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   app.addHook('onClose', async () => {
     clearInterval(timer);
     clearInterval(sweeper);
+    service.stopBots();
     await host.closeAll();
     if (ownsDb) await db.close();
   });

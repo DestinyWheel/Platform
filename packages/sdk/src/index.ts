@@ -144,6 +144,29 @@ export interface PublicView {
 /* 插件                                                                */
 /* ------------------------------------------------------------------ */
 
+export type BotLevel = 'easy' | 'normal' | 'hard';
+
+/**
+ * 人机能看到的东西。
+ *
+ * 注意只有 `view`（裁剪后的视图），没有完整 state —— 这样以后加难度也不会变成"靠偷看对手手牌变强"。
+ */
+export interface BotContext {
+  view: PublicView;
+  me: PlayerId;
+  /** 我当前能做的所有具体动作 */
+  legal: AnyAction[];
+  level: BotLevel;
+  rng: () => number;
+}
+
+export interface BotPolicy {
+  id: string;
+  name: string;
+  /** 返回 null 表示放弃，交给平台兜底（随机挑一个合法动作） */
+  choose(context: BotContext): AnyAction | null;
+}
+
 export interface GamePlugin<S extends BaseState = BaseState> {
   manifest: GameManifest;
   /** 建局。必须纯：随机数用 seed 自己算，时间用 now */
@@ -155,9 +178,11 @@ export interface GamePlugin<S extends BaseState = BaseState> {
    * 枚举**具体**可执行动作（带参数）。
    *
    * 相比 legalActions 只给类型，这个能告诉 UI "第 3 张手牌可以打到曼荼罗 2 的高山"。
-   * 也是将来人机（按优先级打分）的入口。
+   * 也是人机的入口。
    */
   legalMoves?(state: S, playerId: PlayerId): AnyAction[];
+  /** 可选的人机策略。不写就只有平台兜底的随机策略 */
+  bots?: BotPolicy[];
 }
 
 /* ------------------------------------------------------------------ */

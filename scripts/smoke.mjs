@@ -114,6 +114,19 @@ async function waitFor(client, predicate, label, timeoutMs = 8000) {
   );
 }
 
+/** 建桌限流在阶段八被故意打满过，后面的用例要能等一下令牌补充 */
+async function createTableWithRetry(api, token, body, attempts = 8) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await api('/tables', { token, method: 'POST', body });
+    } catch (error) {
+      if (error.status !== 429) throw error;
+      await sleep(1200);
+    }
+  }
+  throw new Error('建桌一直被限流，放弃');
+}
+
 async function rollOnce(clients, tableId) {
   const snapshot = clients.alice.state.snapshot;
   const actor = snapshot.activePlayer === clients.aliceId ? clients.alice : clients.bob;
@@ -606,6 +619,57 @@ assert.equal(restored[0].seq, original[0].seq, '恢复后 seq 应一致');
 assert.equal(hashState(restored[0].state), hashState(original[0].state), '恢复后局面哈希应一致');
 await restoreDb.close();
 console.log('✓ 恢复校验：行数一致，牌桌局面哈希一致');
+
+/* ------------------------------ 人机 ------------------------------ */
+
+console.log('\n▶ 阶段九：人机');
+
+const { id: botTable } = await createTableWithRetry(api2, alice.token, {
+  gameId: 'mandala',
+  maxPlayers: 2,
+  options: { bots: 1 },
+});
+// 只有一个人也允许开局——机器人补位
+await api2(`/tables/${botTable}/start`, { token: alice.token, method: 'POST' });
+
+const botWs = connect(server2.wsBase, alice.token);
+await botWs.ready;
+botWs.send({ t: 'subscribe', tableId: botTable });
+
+const botOpened = await waitFor(botWs, (s) => s.status === 'playing', '人机桌开局');
+const botSeats = botOpened.players.filter((player) => player.bot);
+assert.equal(botSeats.length, 1, '单人开局应补 1 个机器人');
+assert.equal(botOpened.players.length, 2, '总共应有 2 个座位');
+console.log(`✓ 单人开局补位成功：${botOpened.players.map((p) => p.name).join(' vs ')}`);
+
+// 先把人类这一回合走完（打原野不换手，可能要走好几步），再等机器人动
+let humanSteps = 0;
+while (humanSteps < 12) {
+  const current = botWs.state.snapshot;
+  if (current.activePlayer !== alice.user.id) break;
+  const move = current.legalMoves[0];
+  if (!move) break;
+
+  humanSteps += 1;
+  const before = current.seq;
+  botWs.send({ t: 'action', tableId: botTable, type: move.type, payload: move.payload });
+  await waitFor(botWs, (s) => s.seq !== before, '人类动作生效');
+}
+
+const beforeBot = botWs.state.snapshot;
+assert.notEqual(beforeBot.activePlayer, alice.user.id, '人类走完后应该轮到机器人');
+
+const botMoved = await waitFor(botWs, (s) => s.seq > beforeBot.seq, '机器人自动行动', 8000);
+console.log(`✓ 机器人自动走了一步：seq ${beforeBot.seq} → ${botMoved.seq}`);
+
+// 机器人走的是和真人完全相同的通道，所以动作日志里能看到它的提交
+const botActions = await db2.query(
+  "SELECT actor, kind FROM match_actions WHERE table_id = $1 AND actor LIKE 'bot:%'",
+  [botTable],
+);
+assert.ok(botActions.length >= 1, '动作日志里应有机器人提交的动作');
+console.log(`✓ 机器人动作已入库（${botActions.length} 条，actor 形如 bot:…）`);
+botWs.close();
 
 /* ------------------------------ 收尾 ------------------------------ */
 

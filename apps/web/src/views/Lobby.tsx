@@ -34,6 +34,7 @@ export function Lobby({
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
   const [boardGame, setBoardGame] = useState('');
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
+  const [withBot, setWithBot] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -78,7 +79,11 @@ export function Lobby({
     setBusy(game.id);
     setError(null);
     try {
-      const { id } = await api.createTable({ gameId: game.id, maxPlayers: game.players.max });
+      const { id } = await api.createTable({
+        gameId: game.id,
+        maxPlayers: game.players.max,
+        ...(withBot ? { options: { bots: 1 } } : {}),
+      });
       onOpen(id);
     } catch (err) {
       setError((err as Error).message);
@@ -115,6 +120,14 @@ export function Lobby({
 
       <section>
         <h2>开始一局</h2>
+        <label className="bot-toggle">
+          <input
+            type="checkbox"
+            checked={withBot}
+            onChange={(event) => setWithBot(event.target.checked)}
+          />
+          开局缺人时补一个机器人（单人也能玩）
+        </label>
         <div className="game-grid">
           {games.map((game) => (
             <article key={game.id} className="game-card">

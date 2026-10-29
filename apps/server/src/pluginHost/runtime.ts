@@ -29,6 +29,12 @@ export interface DescribeResult {
   legalMoves: AnyAction[];
 }
 
+/** 人机决定要走的动作；actor 是它替哪个座位走 */
+export interface BotDecision {
+  actor: PlayerId;
+  action: AnyAction;
+}
+
 /**
  * 一个版本在内存里的实体。
  *
@@ -47,6 +53,8 @@ export interface PluginRuntime {
   ): Promise<ApplyResult>;
   applyTimeout(state: unknown, now: number): Promise<TimeoutResult | null>;
   describe(state: unknown, viewer: PlayerId | 'spectator', playerId?: PlayerId): Promise<DescribeResult>;
+  /** 让插件决定一步（内部跑策略 + 平台兜底），主线程只负责把它当普通动作提交 */
+  botMove(state: unknown, level: string): Promise<BotDecision | null>;
   terminate(): Promise<void>;
 }
 
@@ -173,6 +181,10 @@ export class WorkerPluginRuntime implements PluginRuntime {
     playerId?: PlayerId,
   ): Promise<DescribeResult> {
     return this.call<DescribeResult>('describe', { state, viewer, playerId });
+  }
+
+  botMove(state: unknown, level: string): Promise<BotDecision | null> {
+    return this.call<BotDecision | null>('botMove', { state, level });
   }
 
   async terminate(): Promise<void> {

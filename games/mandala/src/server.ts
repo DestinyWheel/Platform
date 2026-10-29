@@ -12,6 +12,8 @@ import type {
   ActionDef,
   AnyAction,
   BaseState,
+  BotContext,
+  BotPolicy,
   GameManifest,
   GamePlugin,
   PlayerId,
@@ -518,11 +520,79 @@ const states: Record<string, StateDef<MandalaState>> = {
 };
 
 /* ------------------------------------------------------------------ */
+/* 人机：按优先级打分的简单策略                                          */
+/* ------------------------------------------------------------------ */
+
+interface BotMandalaView {
+  fields: ColorCounts[];
+  mountain: ColorCounts;
+  colorCount: number;
+}
+
+interface BotViewData {
+  mandalas: BotMandalaView[];
+  you: { hand: number[] } | null;
+  settlement: { mandalaIdx: number; picker: PlayerId } | null;
+}
+
+const greedyBot: BotPolicy = {
+  id: 'greedy',
+  name: '贪心',
+  choose(context: BotContext): AnyAction | null {
+    const data = context.view.data as unknown as BotViewData;
+    if (!data?.mandalas) return null;
+
+    // 结算优先：拿走高山上张数最多的颜色
+    const picks = context.legal.filter((move) => move.type === 'pickColor');
+    if (picks.length > 0) {
+      const settlement = data.settlement;
+      const mountain = settlement ? (data.mandalas[settlement.mandalaIdx]?.mountain ?? {}) : {};
+      const score = (move: AnyAction): number => {
+        const color = (move.payload as { color: number }).color;
+        return (mountain[color] ?? 0) * 10 - color;
+      };
+      return [...picks].sort((a, b) => score(b) - score(a))[0] ?? null;
+    }
+
+    const hand = data.you?.hand ?? [];
+    const playScore = (move: AnyAction): number => {
+      const { card, mandala } = move.payload as { card: number; mandala: number };
+      const board = data.mandalas[mandala];
+      const color = hand[card];
+      if (!board || color === undefined) return -1;
+
+      const present =
+        (board.fields[0]?.[color] ?? 0) +
+        (board.fields[1]?.[color] ?? 0) +
+        (board.mountain?.[color] ?? 0);
+
+      // 这一幅里还没出现过的颜色最值钱：直接推进"集齐六色"
+      return (present === 0 ? 100 : 0) + board.colorCount;
+    };
+
+    const pickBest = (type: string): AnyAction | null => {
+      const candidates = context.legal.filter((move) => move.type === type);
+      if (candidates.length === 0) return null;
+      return [...candidates].sort((a, b) => playScore(b) - playScore(a))[0] ?? null;
+    };
+
+    return (
+      pickBest('playMountain') ??
+      pickBest('playField') ??
+      context.legal.find((move) => move.type === 'endTurn') ??
+      context.legal[0] ??
+      null
+    );
+  },
+};
+
+/* ------------------------------------------------------------------ */
 /* 插件                                                                */
 /* ------------------------------------------------------------------ */
 
 const mandala: GamePlugin<MandalaState> = {
   manifest,
+  bots: [greedyBot],
 
   createState({ players, seed }) {
     const rng = mulberry32(seed);

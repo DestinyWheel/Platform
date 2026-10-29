@@ -127,6 +127,7 @@ export function TableView({
               return (
                 <div key={player.id} className={classes.join(' ')}>
                   <span className="seat-name">{player.name}</span>
+                  {player.bot ? <span className="tag">🤖</span> : null}
                   {player.id === snapshot.hostId ? <span className="tag">房主</span> : null}
                   {snapshot.activePlayer === player.id ? <span className="dot" /> : null}
                 </div>

@@ -48,6 +48,8 @@ interface MutationOutcome<T> {
   write: boolean;
   result: T;
   log?: ActionLog;
+  /** 落子之后轮到谁（用于判断该不该让机器人动） */
+  activePlayer?: string | null;
 }
 
 export class TableService {
@@ -97,6 +99,8 @@ export class TableService {
         this.bus.publish(tableId);
         // 结算在这一步之后做：只有 CAS 成功才算这局真的结束了
         if (table.status === 'finished') await this.recordResult(table);
+        // 如果轮到机器人，安排它走一步
+        this.scheduleBot(table, outcome.activePlayer ?? null);
         return outcome.result;
       }
       // 被别人抢先写了：丢弃这次的计算结果，重读重算
@@ -169,6 +173,20 @@ export class TableService {
       if (table.status !== 'lobby') throw new ServiceError('already_started', '对局已经开始');
 
       const runtime = await this.runtimeOf(table);
+
+      // 开局时按 options.bots 补几个机器人座位
+      const requestedBots = Number(table.options.bots ?? 0);
+      if (Number.isFinite(requestedBots) && requestedBots > 0) {
+        for (let index = 0; index < requestedBots && table.players.length < table.maxPlayers; index += 1) {
+          table.players.push({
+            id: `bot:${randomUUID()}`,
+            name: `机器人 ${index + 1}`,
+            seat: table.players.length,
+            bot: true,
+          });
+        }
+      }
+
       if (table.players.length < runtime.manifest.players.min) {
         throw new ServiceError(
           'not_enough_players',
@@ -197,6 +215,7 @@ export class TableService {
       return {
         write: true,
         result: undefined,
+        activePlayer,
         log: {
           actor: userId,
           kind: 'start',
@@ -240,6 +259,7 @@ export class TableService {
       return {
         write: true,
         result: undefined,
+        activePlayer: applied.activePlayer,
         log: {
           actor: userId,
           kind: 'action',
@@ -283,6 +303,7 @@ export class TableService {
           return {
             write: true,
             result: undefined,
+            activePlayer: applied.activePlayer,
             log: {
               // 超时也记下"代打了什么"，否则这一步在回放里就断了
               actor: applied.actor,
@@ -549,6 +570,57 @@ export class TableService {
         at: now,
       });
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 人机                                                              */
+  /* ---------------------------------------------------------------- */
+
+  private readonly botTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * 轮到机器人就安排它走一步。
+   *
+   * 机器人**不是特殊路径**：它同样走 act() → validate → reduce → CAS，
+   * 只是提交动作的不是一条 WebSocket 连接，而是一个定时器。
+   */
+  private scheduleBot(table: TableRecord, activePlayer: string | null): void {
+    if (!activePlayer || table.status === 'finished') return;
+
+    const seat = table.players.find((player) => player.id === activePlayer);
+    if (!seat?.bot) return;
+    if (this.botTimers.has(table.id)) return;
+
+    // 假装思考一下，别让对手看到瞬间连走三步
+    const delay = 400 + Math.floor(Math.random() * 600);
+    const timer = setTimeout(() => {
+      this.botTimers.delete(table.id);
+      void this.playBotTurn(table.id).catch((error) => this.onError(error, table.id));
+    }, delay);
+    timer.unref?.();
+    this.botTimers.set(table.id, timer);
+  }
+
+  private async playBotTurn(tableId: string): Promise<void> {
+    const table = await this.store.getTable(tableId);
+    if (!table || table.status === 'finished' || !table.state) return;
+
+    const runtime = await this.runtimeOf(table);
+    const level = typeof table.options.botLevel === 'string' ? table.options.botLevel : 'normal';
+    const decision = await runtime.botMove(table.state, level);
+    if (!decision) return;
+
+    const seat = table.players.find((player) => player.id === decision.actor);
+    if (!seat?.bot) return;
+
+    // 和真人完全相同的提交路径
+    await this.act(tableId, decision.actor, decision.action);
+  }
+
+  /** 关服时清掉还没触发的机器人定时器 */
+  stopBots(): void {
+    for (const timer of this.botTimers.values()) clearTimeout(timer);
+    this.botTimers.clear();
   }
 
   private appendLogs(table: TableRecord, effects: Effect[], now: number): void {

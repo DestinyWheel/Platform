@@ -2,7 +2,7 @@
 
 私人桌游平台（BGA 风格），游戏以插件形式存在，**新增/升级游戏不需要重启服务，也不需要重新发布前端**。
 
-当前进度：**M4 完成** —— 骨架、持久化、CAS 并发、插件热加载（含 worker 隔离）、回放/聊天/观战/战绩/Elo 之上，补齐了运维层：**限流、结构化日志、备份恢复、指标**。
+当前进度：**M0–M5 全部完成** —— 骨架、持久化、CAS 并发、插件热加载（含 worker 隔离与回收）、回放/聊天/观战/战绩/Elo、人机、以及限流/日志/备份/指标。
 
 ## 快速开始
 
@@ -32,7 +32,7 @@ pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 
 一句话：**每局游戏 = 可序列化状态 + 纯函数 reducer + 事件日志**，进程里不留长驻游戏对象，所以换游戏代码不需要重启。
 
-详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)、[docs/m3.md](docs/m3.md)、[docs/m5.md](docs/m5.md)（M4 人机尚未开始）。
+详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)、[docs/m3.md](docs/m3.md)、[docs/m4.md](docs/m4.md)、[docs/m5.md](docs/m5.md)。
 
 ```
 apps/
@@ -72,6 +72,7 @@ scripts/
 | 观战 | 不坐下也能看，顶栏显示当前有几个人在看 |
 | 战绩 | 大厅里的「我的战绩」：场次 / 胜场 / 胜率，附最近对局（可直接跳回放） |
 | Elo | 每人每个游戏一个分数，默认 1500，零和；开桌时 `ranked: false` 可打休闲局不计分 |
+| 人机 | 大厅勾选「补一个机器人」即可单人开局；机器人走和真人完全相同的动作通道，只是不产生战绩与 Elo |
 
 ## 运维
 

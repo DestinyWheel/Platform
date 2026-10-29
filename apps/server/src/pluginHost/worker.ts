@@ -17,6 +17,7 @@ import {
   createInitialState,
   enumerateLegalMoves,
   legalActions,
+  mulberry32,
 } from '@platform/engine';
 
 interface WorkerInit {
@@ -51,13 +52,29 @@ function serializeError(error: unknown): { name: string; code: string; message: 
 
 interface Request {
   id: number;
-  op: 'ready' | 'createState' | 'applyAction' | 'applyTimeout' | 'describe';
+  op: 'ready' | 'createState' | 'applyAction' | 'applyTimeout' | 'describe' | 'botMove';
   setup?: SetupContext;
   state?: unknown;
   playerId?: string;
   action?: AnyAction;
   now?: number;
   viewer?: string;
+  level?: string;
+}
+
+/** 人机的随机数跟局面种子绑死：同一局重放时行为一致 */
+function seededRandom(seed: number, salt: string): () => number {
+  let hash = seed >>> 0;
+  for (let index = 0; index < salt.length; index += 1) {
+    hash = (Math.imul(hash, 31) + salt.charCodeAt(index)) >>> 0;
+  }
+  return mulberry32(hash);
+}
+
+function sameAction(a: AnyAction, b: AnyAction): boolean {
+  return (
+    a.type === b.type && JSON.stringify(a.payload ?? null) === JSON.stringify(b.payload ?? null)
+  );
 }
 
 parentPort?.on('message', (request: Request) => {
@@ -108,6 +125,48 @@ parentPort?.on('message', (request: Request) => {
               ? enumerateLegalMoves(loaded, state, request.playerId)
               : [],
           };
+          break;
+        }
+
+        case 'botMove': {
+          const state = request.state as any;
+          const actor = activePlayerOf(loaded, state);
+          if (!actor) {
+            result = null;
+            break;
+          }
+
+          const moves = enumerateLegalMoves(loaded, state, actor);
+          if (moves.length === 0) {
+            result = null;
+            break;
+          }
+
+          const level = request.level ?? 'normal';
+          const policy = level === 'easy' ? null : (loaded.bots?.[0] ?? null);
+          const rng = seededRandom(Number(state.rngSeed ?? 0), actor);
+
+          let chosen: AnyAction | null = null;
+          if (policy) {
+            try {
+              const proposed = policy.choose({
+                view: loaded.view(state, actor),
+                me: actor,
+                legal: moves,
+                level: level as any,
+                rng,
+              });
+              // 插件可能返回一个不合法的动作，这里必须校验，不能盲信
+              if (proposed && moves.some((move) => sameAction(move, proposed))) {
+                chosen = proposed;
+              }
+            } catch {
+              chosen = null;
+            }
+          }
+
+          // 平台兜底：随机挑一个合法动作
+          result = { actor, action: chosen ?? moves[Math.floor(rng() * moves.length)]! };
           break;
         }
 
