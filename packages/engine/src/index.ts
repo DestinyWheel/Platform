@@ -242,4 +242,28 @@ export function legalActions<S extends BaseState>(
   return out;
 }
 
+/**
+ * 枚举具体可执行动作。
+ *
+ * 插件实现了 legalMoves 就用它（能带参数，UI 可以精确高亮）；
+ * 没实现就退回"只给类型"，保持老插件兼容。
+ */
+export function enumerateLegalMoves<S extends BaseState>(
+  plugin: GamePlugin<S>,
+  state: S,
+  playerId: PlayerId,
+): AnyAction[] {
+  if (state.finished) return [];
+
+  if (plugin.legalMoves) {
+    try {
+      return plugin.legalMoves(state, playerId) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  return legalActions(plugin, state, playerId).map((type) => ({ type }));
+}
+
 export { mulberry32 };

@@ -28,6 +28,8 @@ export interface ClientSnapshot {
   view: PublicView | null;
   /** 当前你有哪些动作可用（非权威，仅用于按钮可点性） */
   legal: string[];
+  /** 具体可执行动作（带参数），用于精确高亮"哪张牌能打去哪" */
+  legalMoves: AnyAction[];
   deadlineAt: number | null;
 }
 

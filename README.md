@@ -48,12 +48,20 @@ packages/
   engine/          纯函数引擎：状态机推进、动作校验、视图裁剪
 games/
   dice/            示例插件：manifest + 服务端规则 + 原生 DOM 客户端
+  mandala/         曼荼罗（移植自 D:\Workspace\gamer\Mandala 的 Lua 实现）
 scripts/
   smoke.mjs        端到端验证
   pack-game.mjs    打包插件
 ```
 
 **分层纪律**：`packages/engine` 不得 import 任何 DB / socket；插件不得碰 DB / socket / 全局随机 / 系统时钟。
+
+## 已有的游戏
+
+| 游戏 | 说明 |
+|---|---|
+| 骰子对决 | 示例，用来跑通链路 |
+| 曼荼罗 | 双人卡牌，规则移植自 Lua 实现，含隐藏信息 / 结算子流程。见 [docs/mandala.md](docs/mandala.md) |
 
 ## 玩起来之后
 
@@ -68,7 +76,7 @@ scripts/
 ## 加一个游戏
 
 1. 复制 `games/dice` 到 `games/<你的游戏>`，改 `manifest.json`（id / 版本 / 人数）
-2. 写 `src/server.ts`（`GamePlugin`：状态机 + 纯 reducer + 视图裁剪）
+2. 写 `src/server.ts`（`GamePlugin`：状态机 + 纯 reducer + 视图裁剪；动作带参数时建议实现 `legalMoves`，UI 才能精确高亮）
 3. 写 `src/client.ts`（`GameClient`：`mount` / `update` / `unmount`，可以是原生 DOM、Canvas 或任意框架）
 4. 重启 `pnpm dev`（开发态自动发布），或者 `pnpm pack:game games/xxx` 后到后台 `POST /api/admin/plugins` 上传
 

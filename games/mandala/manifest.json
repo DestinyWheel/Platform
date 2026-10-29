@@ -1,0 +1,10 @@
+{
+  "id": "mandala",
+  "name": "曼荼罗",
+  "version": "0.1.0",
+  "apiVersion": "^1.0.0",
+  "players": { "min": 2, "max": 2 },
+  "modes": ["turnbased"],
+  "tags": ["卡牌", "策略", "双人"],
+  "estimatedMinutes": 25
+}

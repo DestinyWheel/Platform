@@ -16,6 +16,7 @@ import {
   applyAction,
   applyTimeout,
   createInitialState,
+  enumerateLegalMoves,
   legalActions,
   RuleError,
 } from '@platform/engine';
@@ -316,11 +317,15 @@ export class TableService {
     let view: PublicView | null = null;
     let activePlayer: string | null = null;
     let legal: string[] = [];
+    let legalMoves: AnyAction[] = [];
 
     if (table.state) {
       view = plugin.view(table.state as any, isPlayer ? viewerId : 'spectator');
       activePlayer = activePlayerOf(plugin, table.state as any);
-      if (isPlayer) legal = legalActions(plugin, table.state as any, viewerId);
+      if (isPlayer) {
+        legal = legalActions(plugin, table.state as any, viewerId);
+        legalMoves = enumerateLegalMoves(plugin, table.state as any, viewerId);
+      }
     }
 
     const chat = await this.store.listChat(table.id, 30);
@@ -340,6 +345,7 @@ export class TableService {
       you: { id: viewerId, isPlayer, isHost: table.hostId === viewerId },
       view,
       legal,
+      legalMoves,
       activePlayer,
       deadlineAt: table.deadlineAt,
       log: table.log.filter((entry) => entry.to === 'all' || entry.to.includes(viewerId)).slice(-80),

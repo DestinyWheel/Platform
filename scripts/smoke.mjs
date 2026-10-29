@@ -161,10 +161,12 @@ const alice = await api1('/auth/login', { method: 'POST', body: { name: '爱丽�
 const bob = await api1('/auth/login', { method: 'POST', body: { name: '鲍勃' } });
 
 const games1 = await api1('/games');
-assert.equal(games1.games.length, 1, '应自动发布 1 个游戏');
-assert.equal(games1.games[0].id, 'dice');
-assert.equal(games1.games[0].version, '0.1.0');
-console.log(`✓ 自动发布：${games1.games[0].name}@${games1.games[0].version}`);
+assert.ok(games1.games.length >= 2, `应自动发布多个游戏，实际 ${games1.games.length}`);
+const diceInitial = games1.games.find((game) => game.id === 'dice');
+assert.ok(diceInitial, '应自动发布 dice');
+assert.equal(diceInitial.version, '0.1.0');
+assert.ok(games1.games.find((game) => game.id === 'mandala'), '应自动发布 mandala');
+console.log(`✓ 自动发布：${games1.games.map((game) => `${game.id}@${game.version}`).join(', ')}`);
 
 const { id: tableA } = await api1('/tables', {
   token: alice.token,
@@ -204,7 +206,8 @@ assert.equal(upload.status, 'active');
 console.log(`✓ 上传成功：dice@${upload.version} 已激活`);
 
 const games2 = await api1('/games');
-assert.equal(games2.games[0].version, '0.2.0', '大厅应立刻看到新版本');
+const diceAfterUpload = games2.games.find((game) => game.id === 'dice');
+assert.equal(diceAfterUpload?.version, '0.2.0', '大厅应立刻看到新版本');
 
 // 老桌仍锁 0.1.0，且还能继续打
 await rollOnce(clients, tableA);
@@ -267,7 +270,11 @@ assert.equal(recovered.snapshot.seq, stillOld.seq, 'seq 应续上');
 console.log(`✓ 重启后老桌恢复：版本=${recovered.snapshot.gameVersion}，seq=${recovered.snapshot.seq}`);
 
 const gamesAfterRestart = await api2('/games');
-assert.equal(gamesAfterRestart.games[0].version, '0.2.0', 'active 版本从库里恢复');
+assert.equal(
+  gamesAfterRestart.games.find((game) => game.id === 'dice')?.version,
+  '0.2.0',
+  'active 版本从库里恢复',
+);
 console.log('✓ active 版本从库里恢复为 0.2.0');
 
 /* ------------------------------ 打完 + 校验 ------------------------------ */
@@ -400,6 +407,112 @@ assert.ok(
 );
 console.log(`✓ 超时动作已入库，回放 ${timeoutReplay.replay.steps.length} 步可见`);
 timeoutClient.close();
+
+/* ------------------------------ 曼荼罗完整对局 ------------------------------ */
+
+console.log('\n▶ 阶段六：曼荼罗 —— 隐藏信息 / legalMoves / 完整对局 / 回放');
+
+const { id: mandalaTable } = await api2('/tables', {
+  token: alice.token,
+  method: 'POST',
+  body: { gameId: 'mandala' },
+});
+await api2(`/tables/${mandalaTable}/join`, { token: bob.token, method: 'POST' });
+await api2(`/tables/${mandalaTable}/start`, { token: alice.token, method: 'POST' });
+
+const mandalaAlice = connect(server2.wsBase, alice.token);
+const mandalaBob = connect(server2.wsBase, bob.token);
+await Promise.all([mandalaAlice.ready, mandalaBob.ready]);
+mandalaAlice.send({ t: 'subscribe', tableId: mandalaTable });
+mandalaBob.send({ t: 'subscribe', tableId: mandalaTable });
+
+const opened = await waitFor(mandalaAlice, (s) => s.status === 'playing', '曼荼罗开局');
+const openedData = opened.view.data;
+
+assert.ok(Array.isArray(openedData.you?.hand), '自己应该看得到手牌');
+assert.equal(openedData.you.hand.length, 6, '起始手牌应为 6 张');
+assert.equal(openedData.opponent?.hand, undefined, '不应看到对手手牌内容');
+assert.equal(openedData.opponent.handCount, 6, '只应看到对手手牌张数');
+assert.equal(openedData.you.cupCount, 2, '起始沙杯 2 张');
+assert.equal(openedData.mandalas.length, 2);
+const mountainCards = Object.values(openedData.mandalas[0].mountain ?? {}).reduce(
+  (sum, count) => sum + count,
+  0,
+);
+assert.equal(mountainCards, 2, '高山初始应有 2 张（两张可能同色）');
+assert.ok(opened.legalMoves.length > 0, '先手应有合法动作');
+console.log(
+  `✓ 隐藏信息正确：自己 6 张手牌、对手只有张数；高山 2 张、牌堆 ${openedData.deckRemaining}`,
+);
+
+// 观战者视角：谁都看不到手牌
+const watcher = await api2('/auth/login', { method: 'POST', body: { name: '旁观者' } });
+const watcherWs = connect(server2.wsBase, watcher.token);
+await watcherWs.ready;
+watcherWs.send({ t: 'subscribe', tableId: mandalaTable });
+const watched = await waitFor(watcherWs, (s) => s.view !== null, '观战视角');
+assert.equal(watched.view.data.you, null, '观战者不应有手牌');
+assert.equal(watched.view.data.opponent, null, '观战者不应看到任何一方手牌');
+console.log('✓ 观战者看不到任何人的手牌');
+
+// 用 legalMoves 自动打完一局
+let mandalaTurns = 0;
+let stalled = 0;
+while (mandalaTurns < 400) {
+  mandalaTurns += 1;
+  const current = mandalaAlice.state.snapshot;
+  if (current.status === 'finished') break;
+
+  const activeId = current.activePlayer;
+  const actor = activeId === alice.user.id ? mandalaAlice : mandalaBob;
+  const moves = actor.state.snapshot.legalMoves ?? [];
+  assert.ok(moves.length > 0, `轮到 ${activeId} 时应有合法动作`);
+
+  // 优先出牌，避免两边一直互相弃牌把牌耗光
+  const move = moves.find((m) => m.type !== 'endTurn') ?? moves[0];
+  stalled = move.type === 'endTurn' ? stalled + 1 : 0;
+  if (stalled > 30) break;
+
+  const before = current.seq;
+  actor.send({ t: 'action', tableId: mandalaTable, type: move.type, payload: move.payload });
+  await waitFor(
+    mandalaAlice,
+    (s) => s.seq !== before || s.status === 'finished',
+    '曼荼罗动作生效',
+  );
+}
+
+const mandalaFinal = mandalaAlice.state.snapshot;
+if (mandalaFinal.status === 'finished') {
+  assert.ok(Array.isArray(mandalaFinal.view.ranking), '终局应有排名');
+  assert.equal(mandalaFinal.view.ranking.flat().length, 2, '两人都应出现在排名里');
+  console.log(`✓ 曼荼罗打完：${mandalaTurns} 步，胜者 ${mandalaFinal.view.ranking[0].length > 1 ? '（平局）' : '已产生'}`);
+} else {
+  console.log(`⚠ 曼荼罗未在 ${mandalaTurns} 步内结束（当前 ${mandalaFinal.status}），仍校验回放`);
+}
+
+const mandalaReplay = await api2(`/tables/${mandalaTable}/replay`, { token: alice.token });
+assert.ok(mandalaReplay.replay.steps.length > 5, '回放应有足够步数');
+assert.equal(
+  JSON.stringify(mandalaReplay.replay.steps.at(-1).view).includes('"hand"'),
+  false,
+  '回放是观战者视角，不应含任何手牌',
+);
+console.log(`✓ 曼荼罗回放 ${mandalaReplay.replay.steps.length} 步，且不含手牌内容`);
+
+// 前端产物也要是能加载的 ESM
+const mandalaClientRes = await fetch(`${server2.base}/plugins/mandala/0.1.0/client.js`);
+assert.equal(mandalaClientRes.status, 200, '曼荼罗前端产物应可访问');
+const mandalaClientCode = await mandalaClientRes.text();
+const mandalaClientFile = path.join(workDir, 'mandala-client.mjs');
+writeFileSync(mandalaClientFile, mandalaClientCode);
+const mandalaClientModule = await import(pathToFileURL(mandalaClientFile).href);
+assert.equal(typeof mandalaClientModule.default?.mount, 'function', '曼荼罗 client 应导出 mount');
+console.log(`✓ 曼荼罗前端产物可加载（${(mandalaClientCode.length / 1024).toFixed(1)} KB）`);
+
+mandalaAlice.close();
+mandalaBob.close();
+watcherWs.close();
 
 /* ------------------------------ 收尾 ------------------------------ */
 

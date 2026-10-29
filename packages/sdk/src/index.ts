@@ -151,6 +151,13 @@ export interface GamePlugin<S extends BaseState = BaseState> {
   states: Record<string, StateDef<S>>;
   actions: Record<string, ActionDef<S>>;
   view(state: S, viewer: PlayerId | 'spectator'): PublicView;
+  /**
+   * 枚举**具体**可执行动作（带参数）。
+   *
+   * 相比 legalActions 只给类型，这个能告诉 UI "第 3 张手牌可以打到曼荼罗 2 的高山"。
+   * 也是将来人机（按优先级打分）的入口。
+   */
+  legalMoves?(state: S, playerId: PlayerId): AnyAction[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -238,6 +245,8 @@ export interface TableSnapshot {
   view: PublicView | null;
   /** 当前你有哪些动作可用（UI 提示用，非权威） */
   legal: string[];
+  /** 具体可执行动作（带参数），UI 靠它做高亮 */
+  legalMoves: AnyAction[];
   activePlayer: PlayerId | null;
   deadlineAt: number | null;
   log: LogEntry[];

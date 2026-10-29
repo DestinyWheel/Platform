@@ -131,6 +131,7 @@ export function ReplayView({ tableId, onExit }: { tableId: string; onExit: () =>
               status: step.view.finished ? 'finished' : 'playing',
               view: step.view,
               legal: [],
+              legalMoves: [],
               deadlineAt: null,
             }}
             me="spectator"

@@ -104,6 +104,15 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
+  games/mandala:
+    dependencies:
+      '@platform/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   packages/engine:
     dependencies:
       '@platform/sdk':

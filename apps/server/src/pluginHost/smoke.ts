@@ -3,7 +3,7 @@ import {
   activePlayerOf,
   applyAction,
   createInitialState,
-  legalActions,
+  enumerateLegalMoves,
   RuleError,
 } from '@platform/engine';
 import { hashState } from '../hash.js';
@@ -47,20 +47,22 @@ function runOnce(plugin: GamePlugin<any>, seed: number, players: string[]): RunR
     const player = activePlayerOf(plugin, state);
     if (!player) break;
 
-    const candidates = legalActions(plugin, state, player);
-    if (candidates.length === 0) break;
+    const moves = enumerateLegalMoves(plugin, state, player);
+    if (moves.length === 0) break;
 
     let advanced = false;
-    for (const type of candidates) {
+    // 从不同起点轮着挑，让随机漫步覆盖到更多分支；同一步的结果只依赖状态，可复现
+    for (let offset = 0; offset < moves.length; offset += 1) {
+      const move = moves[(step + offset) % moves.length]!;
       try {
-        const applied = applyAction(plugin, state, player, { type }, 0);
+        const applied = applyAction(plugin, state, player, move, 0);
         state = applied.state;
         hashes.push(hashState(state));
         advanced = true;
         settled = true;
         break;
       } catch (error) {
-        if (error instanceof RuleError) continue; // 这个动作需要额外参数，换下一个
+        if (error instanceof RuleError) continue; // legalMoves 给多了，换下一个
         throw error;
       }
     }

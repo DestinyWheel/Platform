@@ -171,6 +171,7 @@ export function TableView({
                 status: snapshot.status,
                 view: snapshot.view,
                 legal: snapshot.legal,
+                legalMoves: snapshot.legalMoves,
                 deadlineAt: snapshot.deadlineAt,
               }}
               me={session.user.id}
