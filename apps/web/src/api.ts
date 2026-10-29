@@ -98,6 +98,9 @@ export const api = {
   authConfig: () =>
     request<{ registration: 'open' | 'code'; allowClaim: boolean }>('/auth/config'),
 
+  /** 刷新当前用户（权限可能被管理员改过，本地存的可能过期了） */
+  me: () => request<{ user: AuthUser }>('/me'),
+
   register: (input: { name: string; password: string; confirm: string; code?: string; remember?: boolean }) =>
     request<{ token: string; user: AuthUser }>('/auth/register', {
       method: 'POST',

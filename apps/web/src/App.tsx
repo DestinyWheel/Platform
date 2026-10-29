@@ -60,6 +60,27 @@ export function App() {
     return () => setUnauthorizedHandler(null);
   }, []);
 
+  // 打开页面时用库里的事实刷新一次当前用户：管理员可能已经被改过权限，
+  // 本地 localStorage 里的 isAdmin 只是上次登录时的快照
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    api
+      .me()
+      .then((data) => {
+        if (cancelled) return;
+        const next = { ...session, user: data.user };
+        saveSession(next);
+        setSession(next);
+      })
+      .catch(() => undefined); // 401 会由上面的统一处理回登录页
+    return () => {
+      cancelled = true;
+    };
+    // 只在挂载时跑一次；之后 session 变了也没必要再问
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const onHashChange = () => setView(readHash());
     window.addEventListener('hashchange', onHashChange);
