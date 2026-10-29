@@ -12,6 +12,8 @@ const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const MIGRATIONS = [
   { version: 1, file: 'schema.sql' },
   { version: 2, file: '002_plugins.sql' },
+  { version: 3, file: '003_social.sql' },
+  { version: 4, file: '004_ratings.sql' },
 ];
 
 export interface DbOptions {

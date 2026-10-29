@@ -1,4 +1,13 @@
-import type { AuthUser, GameManifest, TableSnapshot, TableSummary } from '@platform/sdk';
+import type {
+  AuthUser,
+  GameManifest,
+  LeaderboardEntry,
+  PlayerStatsRow,
+  RecentMatchRow,
+  ReplayPayload,
+  TableSnapshot,
+  TableSummary,
+} from '@platform/sdk';
 
 const SESSION_KEY = 'platform.session';
 
@@ -63,4 +72,14 @@ export const api = {
   startTable: (id: string) => request<{ ok: true }>(`/tables/${id}/start`, { method: 'POST' }),
 
   snapshot: (id: string) => request<{ snapshot: TableSnapshot }>(`/tables/${id}`),
+
+  replay: (id: string) => request<{ replay: ReplayPayload }>(`/tables/${id}/replay`),
+
+  stats: () =>
+    request<{ perGame: PlayerStatsRow[]; recent: RecentMatchRow[] }>('/stats/me'),
+
+  leaderboard: (gameId: string) =>
+    request<{ gameId: string; entries: LeaderboardEntry[] }>(
+      `/leaderboard?gameId=${encodeURIComponent(gameId)}`,
+    ),
 };

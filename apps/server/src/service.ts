@@ -6,6 +6,8 @@ import type {
   GamePlugin,
   LogEntry,
   PublicView,
+  ReplayPayload,
+  ReplayStep,
   TableSnapshot,
   TableSummary,
 } from '@platform/sdk';
@@ -20,11 +22,14 @@ import {
 import type { EventBus } from './bus.js';
 import type { PluginHost } from './pluginHost/host.js';
 import { hashState } from './hash.js';
-import type { ActionLog, Store, TableRecord, UserRecord } from './store.js';
+import { computeDeltas, DEFAULT_RATING } from './elo.js';
+import type { Presence } from './presence.js';
+import type { ActionLog, RecentMatch, Store, TableRecord, UserRecord } from './store.js';
 
 const DEFAULT_TURN_MS = 30_000;
 const MAX_LOG = 200;
 const MAX_CAS_ATTEMPTS = 5;
+const MAX_REPLAY_STEPS = 400;
 
 export class ServiceError extends Error {
   constructor(
@@ -54,6 +59,7 @@ export class TableService {
     private readonly store: Store,
     private readonly host: PluginHost,
     private readonly bus: EventBus,
+    private readonly presence: Presence,
     private readonly onError: (error: unknown, tableId: string) => void = () => {},
   ) {}
 
@@ -94,6 +100,8 @@ export class TableService {
       const saved = await this.store.updateTable({ table, expectedSeq, log: outcome.log });
       if (saved) {
         this.bus.publish(tableId);
+        // 结算在这一步之后做：只有 CAS 成功才算这局真的结束了
+        if (table.status === 'finished') await this.recordResult(table);
         return outcome.result;
       }
       // 被别人抢先写了：丢弃这次的计算结果，重读重算
@@ -278,9 +286,10 @@ export class TableService {
             write: true,
             result: undefined,
             log: {
-              actor: null,
+              // 超时也记下"代打了什么"，否则这一步在回放里就断了
+              actor: applied.actor,
               kind: 'timeout',
-              action: null,
+              action: applied.action,
               effects: applied.effects,
               stateHash: hashState(applied.state),
             },
@@ -314,6 +323,8 @@ export class TableService {
       if (isPlayer) legal = legalActions(plugin, table.state as any, viewerId);
     }
 
+    const chat = await this.store.listChat(table.id, 30);
+
     return {
       tableId: table.id,
       gameId: table.gameId,
@@ -332,6 +343,8 @@ export class TableService {
       activePlayer,
       deadlineAt: table.deadlineAt,
       log: table.log.filter((entry) => entry.to === 'all' || entry.to.includes(viewerId)).slice(-80),
+      chat,
+      viewers: this.presence.viewers(table.id),
     };
   }
 
@@ -357,20 +370,178 @@ export class TableService {
   }
 
   /* ---------------------------------------------------------------- */
+  /* 聊天 / 回放 / 战绩                                                 */
+  /* ---------------------------------------------------------------- */
+
+  async chat(tableId: string, user: { id: string; name: string }, text: string): Promise<void> {
+    const body = text.trim();
+    if (!body) return;
+    if (body.length > 200) throw new ServiceError('chat_too_long', '消息最多 200 个字');
+
+    const table = await this.store.getTable(tableId);
+    if (!table) throw new ServiceError('no_table', '牌桌不存在');
+
+    await this.store.appendChat(tableId, user.id, user.name, body, Date.now());
+    this.bus.publish(tableId);
+  }
+
+  /**
+   * 回放：把动作日志从头重放一遍，每一步留一张快照。
+   * 因为 reducer 是纯函数，重放出来的局面和当时一模一样（测试里有哈希比对）。
+   */
+  async replay(tableId: string): Promise<ReplayPayload> {
+    const table = await this.store.getTable(tableId);
+    if (!table) throw new ServiceError('no_table', '牌桌不存在');
+
+    const plugin = await this.pluginOf(table);
+    const rows = await this.store.listActions(tableId);
+    const start = rows.find((row) => row.kind === 'start');
+    if (!start) throw new ServiceError('no_replay', '这局还没有可回放的记录');
+
+    const setup = start.action as
+      | { seed: number; players: string[]; options?: Record<string, unknown> }
+      | null;
+    if (!setup || typeof setup.seed !== 'number') {
+      throw new ServiceError('no_replay', '建局记录不完整，无法回放');
+    }
+
+    let state = createInitialState(plugin, {
+      players: setup.players,
+      options: setup.options ?? {},
+      seed: setup.seed,
+      now: 0,
+    }).state;
+
+    const steps: ReplayStep[] = [];
+    const logs: LogEntry[] = [];
+    let truncated = false;
+
+    const pushStep = (seq: number, kind: string, actor: string | null): void => {
+      steps.push({
+        seq,
+        kind,
+        actor,
+        // 回放一律按观战者视角裁剪：不该看到的东西，看回放也不该看到
+        view: plugin.view(state, 'spectator'),
+        log: logs.slice(-60),
+      });
+    };
+
+    pushStep(start.seq, 'start', start.actor);
+
+    for (const row of rows) {
+      if (row.kind === 'start') continue;
+      if (steps.length >= MAX_REPLAY_STEPS) {
+        truncated = true;
+        break;
+      }
+      if (!row.action || !row.actor) continue;
+
+      state = applyAction(plugin, state, row.actor, row.action as AnyAction, Number(row.createdAt))
+        .state;
+      this.pushLogs(logs, (row.effects as Effect[]) ?? [], Number(row.createdAt));
+      pushStep(row.seq, row.kind, row.actor);
+    }
+
+    return {
+      tableId: table.id,
+      gameId: table.gameId,
+      gameName: plugin.manifest.name,
+      gameVersion: table.gameVersion,
+      status: table.status,
+      players: table.players.map((player) => ({ ...player })),
+      steps,
+      truncated,
+    };
+  }
+
+  async stats(userId: string): Promise<{
+    perGame: { gameId: string; gameName: string; games: number; wins: number }[];
+    recent: (RecentMatch & { gameName: string })[];
+  }> {
+    const perGame = await this.store.getUserStats(userId);
+    const recent = await this.store.getRecentMatches(userId, 20);
+
+    const nameOf = (gameId: string): string =>
+      this.host.activeFor(gameId)?.manifest.name ?? gameId;
+
+    return {
+      perGame: perGame.map((row) => ({ ...row, gameName: nameOf(row.gameId) })),
+      recent: recent.map((row) => ({ ...row, gameName: nameOf(row.gameId) })),
+    };
+  }
+
+  /* ---------------------------------------------------------------- */
   /* 内部                                                              */
   /* ---------------------------------------------------------------- */
 
-  private appendLogs(table: TableRecord, effects: Effect[], now: number): void {
+  /** 一局结束写一次战绩 + 更新 Elo；saveMatchResults 幂等，重复调用不会重复计分 */
+  private async recordResult(table: TableRecord): Promise<void> {
+    const ranking = table.state?.ranking;
+    if (!ranking || ranking.length === 0) return;
+
+    const humans = table.players.filter((player) => !player.bot);
+    if (humans.length < 2) return;
+    if (await this.store.hasMatchResults(table.id)) return;
+
+    const rankOf = new Map<string, number>();
+    ranking.forEach((group, index) => {
+      for (const playerId of group) rankOf.set(playerId, index + 1);
+    });
+
+    const rows = humans.map((player) => {
+      const rank = rankOf.get(player.id) ?? humans.length;
+      return { userId: player.id, rank, players: humans.length, isWin: rank === 1 };
+    });
+
+    const finishedAt = table.finishedAt ?? Date.now();
+    await this.store.saveMatchResults(table.id, table.gameId, rows, finishedAt);
+
+    // 默认计分；房主把 options.ranked 设成 false 就是休闲局
+    if (table.options.ranked === false) return;
+
+    const current = await this.store.getRatings(
+      table.gameId,
+      rows.map((row) => row.userId),
+    );
+    const players = rows.map((row) => ({
+      userId: row.userId,
+      rank: row.rank,
+      rating: current.get(row.userId)?.rating ?? DEFAULT_RATING,
+      games: current.get(row.userId)?.games ?? 0,
+    }));
+
+    const deltas = computeDeltas(players);
+    await this.store.applyRatingDeltas(
+      table.gameId,
+      players.map((player) => ({
+        userId: player.userId,
+        rating: player.rating + (deltas.get(player.userId) ?? 0),
+        games: player.games + 1,
+      })),
+      finishedAt,
+    );
+  }
+
+  async leaderboard(gameId: string, limit = 20) {
+    return this.store.listRatings(gameId, limit);
+  }
+
+  private pushLogs(into: LogEntry[], effects: Effect[], now: number): void {
     for (const effect of effects) {
       if (effect.type !== 'log') continue;
-      table.log.push({
-        seq: table.log.length + 1,
+      into.push({
+        seq: into.length + 1,
         key: effect.key,
         args: effect.args,
         to: effect.to ?? 'all',
         at: now,
       });
     }
+  }
+
+  private appendLogs(table: TableRecord, effects: Effect[], now: number): void {
+    this.pushLogs(table.log, effects, now);
     if (table.log.length > MAX_LOG) table.log.splice(0, table.log.length - MAX_LOG);
   }
 

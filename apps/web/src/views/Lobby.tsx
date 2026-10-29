@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { GameManifest, TableSummary } from '@platform/sdk';
+import type {
+  GameManifest,
+  LeaderboardEntry,
+  PlayerStatsRow,
+  RecentMatchRow,
+  TableSummary,
+} from '@platform/sdk';
 import { api, type Session } from '../api';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -11,16 +17,23 @@ const STATUS_LABEL: Record<string, string> = {
 export function Lobby({
   session,
   onOpen,
+  onReplay,
   onLogout,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
+  onReplay: (tableId: string) => void;
   onLogout: () => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+
+  const [perGame, setPerGame] = useState<PlayerStatsRow[]>([]);
+  const [recent, setRecent] = useState<RecentMatchRow[]>([]);
+  const [boardGame, setBoardGame] = useState('');
+  const [board, setBoard] = useState<LeaderboardEntry[]>([]);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -38,6 +51,28 @@ export function Lobby({
     const timer = window.setInterval(() => void refresh(), 2500);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    api
+      .stats()
+      .then((data) => {
+        setPerGame(data.perGame);
+        setRecent(data.recent);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const effectiveGame = boardGame || games[0]?.id || '';
+  useEffect(() => {
+    if (!effectiveGame) return;
+    api
+      .leaderboard(effectiveGame)
+      .then((data) => setBoard(data.entries))
+      .catch(() => setBoard([]));
+  }, [effectiveGame]);
+
+  const winRate = (row: PlayerStatsRow): string =>
+    row.games === 0 ? '—' : `${Math.round((row.wins / row.games) * 100)}%`;
 
   const createTable = async (game: GameManifest): Promise<void> => {
     setBusy(game.id);
@@ -134,6 +169,98 @@ export function Lobby({
           </ul>
         )}
       </section>
+
+      <div className="lobby-columns">
+        <section>
+          <h2>我的战绩</h2>
+          {perGame.length === 0 ? (
+            <div className="muted">还没打完一局。</div>
+          ) : (
+            <table className="stats-table">
+              <thead>
+                <tr>
+                  <th>游戏</th>
+                  <th>场次</th>
+                  <th>胜</th>
+                  <th>胜率</th>
+                </tr>
+              </thead>
+              <tbody>
+                {perGame.map((row) => (
+                  <tr key={row.gameId}>
+                    <td>{row.gameName}</td>
+                    <td>{row.games}</td>
+                    <td>{row.wins}</td>
+                    <td>{winRate(row)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          {recent.length > 0 ? (
+            <ul className="recent-list">
+              {recent.slice(0, 8).map((match) => (
+                <li key={match.tableId}>
+                  <span className={match.isWin ? 'win' : 'lose'}>
+                    {match.isWin ? '胜' : `第 ${match.rank} 名`}
+                  </span>
+                  <span className="muted small">
+                    {match.gameName} · {match.players} 人
+                  </span>
+                  <button className="ghost small" onClick={() => onReplay(match.tableId)}>
+                    回放
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+
+        <section>
+          <h2>排行榜（Elo）</h2>
+          {games.length > 1 ? (
+            <select
+              className="ghost"
+              value={effectiveGame}
+              onChange={(event) => setBoardGame(event.target.value)}
+            >
+              {games.map((game) => (
+                <option key={game.id} value={game.id}>
+                  {game.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {board.length === 0 ? (
+            <div className="muted">这个游戏还没有排名。</div>
+          ) : (
+            <table className="stats-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>玩家</th>
+                  <th>分数</th>
+                  <th>场次</th>
+                </tr>
+              </thead>
+              <tbody>
+                {board.map((entry, index) => (
+                  <tr
+                    key={entry.userId}
+                    className={entry.userId === session.user.id ? 'me' : ''}
+                  >
+                    <td>{index + 1}</td>
+                    <td>{entry.name}</td>
+                    <td>{entry.rating}</td>
+                    <td>{entry.games}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

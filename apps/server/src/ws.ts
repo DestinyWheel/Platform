@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import websocket from '@fastify/websocket';
 import type { ClientMessage, ServerMessage } from '@platform/sdk';
+import { randomUUID } from 'node:crypto';
 import { verifyToken } from './auth.js';
 import type { EventBus } from './bus.js';
+import type { Presence } from './presence.js';
 import { ServiceError, type TableService } from './service.js';
 
 /**
@@ -15,6 +17,7 @@ export async function registerWebSocket(
   app: FastifyInstance,
   service: TableService,
   bus: EventBus,
+  presence: Presence,
 ): Promise<void> {
   await app.register(websocket);
 
@@ -28,6 +31,7 @@ export async function registerWebSocket(
     }
 
     const subscriptions = new Map<string, () => void>();
+    const connectionId = randomUUID();
 
     const send = (msg: ServerMessage): void => {
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
@@ -52,12 +56,17 @@ export async function registerWebSocket(
           void pushSnapshot(tableId);
         }),
       );
+      // 在线人数：同一用户多标签页只算一个人
+      presence.join(tableId, connectionId, user.id);
       void pushSnapshot(tableId);
+      bus.publish(tableId);
     };
 
     const unsubscribe = (tableId: string): void => {
       subscriptions.get(tableId)?.();
       subscriptions.delete(tableId);
+      presence.leave(tableId, connectionId);
+      bus.publish(tableId);
     };
 
     const handleAction = async (
@@ -74,6 +83,19 @@ export async function registerWebSocket(
         }
         request.log.error(err);
         send({ t: 'error', code: 'action_failed', message: '动作执行失败' });
+      }
+    };
+
+    const handleChat = async (tableId: string, text: string): Promise<void> => {
+      try {
+        await service.chat(tableId, user, text);
+      } catch (err) {
+        if (err instanceof ServiceError) {
+          send({ t: 'error', code: err.code, message: err.message });
+          return;
+        }
+        request.log.error(err);
+        send({ t: 'error', code: 'chat_failed', message: '消息发送失败' });
       }
     };
 
@@ -99,12 +121,16 @@ export async function registerWebSocket(
         case 'action':
           void handleAction(msg.tableId, msg.type, msg.payload);
           break;
+        case 'chat':
+          void handleChat(msg.tableId, msg.text);
+          break;
         default:
           send({ t: 'error', code: 'unknown_message', message: '未知消息类型' });
       }
     });
 
     socket.on('close', () => {
+      for (const tableId of subscriptions.keys()) presence.leave(tableId, connectionId);
       for (const off of subscriptions.values()) off();
       subscriptions.clear();
     });

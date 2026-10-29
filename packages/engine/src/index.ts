@@ -189,7 +189,7 @@ export function applyTimeout<S extends BaseState>(
   plugin: GamePlugin<S>,
   state: S,
   now: number,
-): ApplyResult<S> | null {
+): (ApplyResult<S> & { action: AnyAction; actor: PlayerId }) | null {
   const def = plugin.states[state.phase];
   if (!def?.onTimeout) return null;
 
@@ -201,7 +201,8 @@ export function applyTimeout<S extends BaseState>(
   const action = def.onTimeout(probeCtx.state, probeCtx);
   if (!action) return null;
 
-  return applyAction(plugin, state, playerId, action, now);
+  // 把"决定了什么动作"一并返回：超时也能写进动作日志，回放才完整
+  return { ...applyAction(plugin, state, playerId, action, now), action, actor: playerId };
 }
 
 /** 当前该谁动；非 activePlayer 阶段或已结束返回 null */

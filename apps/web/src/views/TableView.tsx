@@ -15,12 +15,14 @@ export function TableView({
   tableId,
   session,
   onExit,
+  onReplay,
 }: {
   tableId: string;
   session: Session;
   onExit: () => void;
+  onReplay: (tableId: string) => void;
 }) {
-  const { snapshot, error, sendAction } = useTableSocket(tableId, session.token);
+  const { snapshot, error, sendAction, sendChat } = useTableSocket(tableId, session.token);
   const { client, error: clientError } = useGameClient(
     snapshot?.gameId ?? '',
     snapshot?.gameVersion ?? '',
@@ -29,7 +31,9 @@ export function TableView({
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState('');
   const logRef = useRef<HTMLUListElement | null>(null);
+  const chatRef = useRef<HTMLUListElement | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 500);
@@ -41,6 +45,12 @@ export function TableView({
     const list = logRef.current;
     if (list) list.scrollTop = list.scrollHeight;
   }, [logLength]);
+
+  const chatLength = snapshot?.chat.length ?? 0;
+  useEffect(() => {
+    const list = chatRef.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [chatLength]);
 
   const join = async (): Promise<void> => {
     setActionError(null);
@@ -95,6 +105,13 @@ export function TableView({
           <div className={`timer ${remainingMs < 5000 ? 'urgent' : ''}`}>
             ⏱ {Math.ceil(remainingMs / 1000)}s
           </div>
+        ) : null}
+        <div className="spacer" />
+        <span className="muted small">👁 {snapshot.viewers}</span>
+        {snapshot.status === 'finished' ? (
+          <button className="ghost" onClick={() => onReplay(tableId)}>
+            看回放
+          </button>
         ) : null}
       </header>
 
@@ -174,6 +191,39 @@ export function TableView({
             ))}
             {snapshot.log.length === 0 ? <li className="muted">还没有记录</li> : null}
           </ul>
+
+          <div className="chat">
+            <h3>聊天</h3>
+            <ul className="chat-list" ref={chatRef}>
+              {snapshot.chat.map((message) => (
+                <li key={message.id} className={message.userId === session.user.id ? 'mine' : ''}>
+                  <span className="chat-name">{message.name}</span>
+                  <span className="chat-body">{message.body}</span>
+                </li>
+              ))}
+              {snapshot.chat.length === 0 ? <li className="muted">还没有人说话</li> : null}
+            </ul>
+            <form
+              className="chat-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const text = draft.trim();
+                if (!text) return;
+                sendChat(text);
+                setDraft('');
+              }}
+            >
+              <input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder="说点什么…"
+                maxLength={200}
+              />
+              <button className="primary" type="submit" disabled={!draft.trim()}>
+                发送
+              </button>
+            </form>
+          </div>
         </aside>
       </div>
     </div>

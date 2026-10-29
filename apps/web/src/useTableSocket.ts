@@ -5,6 +5,7 @@ export interface TableSocket {
   snapshot: TableSnapshot | null;
   error: string | null;
   sendAction: (type: string, payload?: unknown) => void;
+  sendChat: (text: string) => void;
 }
 
 /**
@@ -76,5 +77,15 @@ export function useTableSocket(tableId: string, token: string): TableSocket {
     [tableId],
   );
 
-  return { snapshot, error, sendAction };
+  const sendChat = useCallback(
+    (text: string) => {
+      const ws = socketRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ t: 'chat', tableId, text }));
+      }
+    },
+    [tableId],
+  );
+
+  return { snapshot, error, sendAction, sendChat };
 }

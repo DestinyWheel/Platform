@@ -2,17 +2,28 @@ import { useEffect, useState } from 'react';
 import { loadSession, saveSession, setAuthToken, type Session } from './api';
 import { Lobby } from './views/Lobby';
 import { Login } from './views/Login';
+import { ReplayView } from './views/ReplayView';
 import { TableView } from './views/TableView';
 
-type View = { name: 'lobby' } | { name: 'table'; id: string };
+type View = { name: 'lobby' } | { name: 'table'; id: string } | { name: 'replay'; id: string };
 
 function readHash(): View {
-  const matched = /^#\/table\/([\w-]+)$/.exec(location.hash);
-  return matched?.[1] ? { name: 'table', id: matched[1] } : { name: 'lobby' };
+  const table = /^#\/table\/([\w-]+)$/.exec(location.hash);
+  if (table?.[1]) return { name: 'table', id: table[1] };
+
+  const replay = /^#\/replay\/([\w-]+)$/.exec(location.hash);
+  if (replay?.[1]) return { name: 'replay', id: replay[1] };
+
+  return { name: 'lobby' };
 }
 
 function writeHash(view: View): void {
-  const next = view.name === 'table' ? `#/table/${view.id}` : '#/';
+  const next =
+    view.name === 'table'
+      ? `#/table/${view.id}`
+      : view.name === 'replay'
+        ? `#/replay/${view.id}`
+        : '#/';
   if (location.hash !== next) history.replaceState(null, '', next);
 }
 
@@ -48,13 +59,25 @@ export function App() {
   }
 
   if (view.name === 'table') {
-    return <TableView tableId={view.id} session={session} onExit={() => navigate({ name: 'lobby' })} />;
+    return (
+      <TableView
+        tableId={view.id}
+        session={session}
+        onExit={() => navigate({ name: 'lobby' })}
+        onReplay={(id) => navigate({ name: 'replay', id })}
+      />
+    );
+  }
+
+  if (view.name === 'replay') {
+    return <ReplayView tableId={view.id} onExit={() => navigate({ name: 'lobby' })} />;
   }
 
   return (
     <Lobby
       session={session}
       onOpen={(id) => navigate({ name: 'table', id })}
+      onReplay={(id) => navigate({ name: 'replay', id })}
       onLogout={() => {
         saveSession(null);
         setSession(null);

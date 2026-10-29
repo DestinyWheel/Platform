@@ -2,7 +2,7 @@
 
 私人桌游平台（BGA 风格），游戏以插件形式存在，**新增/升级游戏不需要重启服务，也不需要重新发布前端**。
 
-当前进度：**M2 完成** —— 骨架、持久化、CAS 并发、动作日志重放之上，游戏已经是真正的运行时插件：后台上传即发布、按版本锁定牌桌、老桌不受新版影响。示例游戏「骰子对决」。
+当前进度：**M3 完成** —— 骨架、持久化、CAS 并发、插件热加载之上，补齐了体验层：**对局回放、牌桌聊天、观战人数、战绩与 Elo 排行榜**。示例游戏「骰子对决」。
 
 ## 快速开始
 
@@ -24,7 +24,7 @@ pnpm dev          # 同时起 server(8787) + web(5173)
 ```bash
 pnpm typecheck    # 全仓库类型检查
 pnpm build        # 构建前端到 apps/web/dist
-pnpm smoke        # 端到端：对局 + 热发布新版 + 中途重启恢复 + 日志重放 + 超时
+pnpm smoke        # 端到端：对局 + 热发布新版 + 重启恢复 + 聊天/战绩/回放 + 超时
 pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 ```
 
@@ -32,14 +32,16 @@ pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 
 一句话：**每局游戏 = 可序列化状态 + 纯函数 reducer + 事件日志**，进程里不留长驻游戏对象，所以换游戏代码不需要重启。
 
-详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)。
+详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)、[docs/m3.md](docs/m3.md)。
 
 ```
 apps/
   server/          Fastify + WS + 牌桌服务（CAS 并发）+ 存储 + 插件宿主
     src/db/        数据库抽象：PGlite(本地) / pg(生产) + 迁移
     src/pluginHost/  编译 / 静态检查 / 冒烟 / 版本注册表
-  web/             React 宿主：登录 / 大厅 / 牌桌 / 插件容器
+    src/elo.ts     多人局 Elo 评分
+    src/presence.ts 在线人数（单实例内存实现）
+  web/             React 宿主：登录 / 大厅 / 牌桌 / 回放 / 插件容器
     src/host/      运行时加载 /plugins/<id>/<version>/client.js
 packages/
   sdk/             插件契约（服务端 + 客户端）+ 线上协议
@@ -52,6 +54,16 @@ scripts/
 ```
 
 **分层纪律**：`packages/engine` 不得 import 任何 DB / socket；插件不得碰 DB / socket / 全局随机 / 系统时钟。
+
+## 玩起来之后
+
+| 能力 | 说明 |
+|---|---|
+| 回放 | 一局结束后点「看回放」，按步拖动。服务端重放动作日志生成每步的观战者视角 |
+| 聊天 | 牌桌内实时聊天，落库持久化 |
+| 观战 | 不坐下也能看，顶栏显示当前有几个人在看 |
+| 战绩 | 大厅里的「我的战绩」：场次 / 胜场 / 胜率，附最近对局（可直接跳回放） |
+| Elo | 每人每个游戏一个分数，默认 1500，零和；开桌时 `ranked: false` 可打休闲局不计分 |
 
 ## 加一个游戏
 

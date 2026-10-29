@@ -14,6 +14,7 @@ import { PluginError } from './pluginHost/types.js';
 import { extractPackage } from './pluginHost/upload.js';
 import { ServiceError, TableService } from './service.js';
 import { PgStore, type UserRecord } from './store.js';
+import { Presence } from './presence.js';
 import { registerWebSocket } from './ws.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -58,7 +59,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   const store = new PgStore(db);
   const host = new PluginHost(store, storageRoot);
   const bus = new EventBus();
-  const service = new TableService(store, host, bus, (error, tableId) => {
+  const presence = new Presence();
+  const service = new TableService(store, host, bus, presence, (error, tableId) => {
     app.log.error({ err: error, tableId }, '超时处理失败');
   });
 
@@ -140,6 +142,23 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const user = await requireUser(request);
     await service.startTable(request.params.id, user.id);
     return { ok: true };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/tables/:id/replay', async (request) => {
+    await requireUser(request);
+    return { replay: await service.replay(request.params.id) };
+  });
+
+  app.get('/api/stats/me', async (request) => {
+    const user = await requireUser(request);
+    return await service.stats(user.id);
+  });
+
+  app.get<{ Querystring: { gameId?: string } }>('/api/leaderboard', async (request) => {
+    await requireUser(request);
+    const gameId = request.query.gameId;
+    if (!gameId) throw new ServiceError('invalid_input', '需要 gameId 参数');
+    return { gameId, entries: await service.leaderboard(gameId) };
   });
 
   /* --------------------------- 插件管理 --------------------------- */
@@ -240,7 +259,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   /* ----------------------------- WebSocket ----------------------------- */
 
-  await registerWebSocket(app, service, bus);
+  await registerWebSocket(app, service, bus, presence);
 
   /* ----------------------------- 超时调度 ----------------------------- */
 

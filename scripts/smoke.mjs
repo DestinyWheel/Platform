@@ -320,9 +320,57 @@ const dbTable = await db2.query('SELECT state FROM tables WHERE id = $1', [table
 assert.equal(hashState(replayed), hashState(dbTable[0].state), '重放结果应与库中一致');
 console.log(`✓ 用 0.1.0 产物重放 ${rows.length} 条日志，哈希完全一致`);
 
+/* ------------------------------ 聊天 / 战绩 / Elo / 回放 ------------------------------ */
+
+console.log('\n▶ 阶段四：聊天 / 观战人数 / 战绩 / Elo / 回放');
+
+const chatClient = connect(server2.wsBase, alice.token);
+await chatClient.ready;
+chatClient.send({ t: 'subscribe', tableId: tableA });
+await waitFor(chatClient, (s) => s.status === 'finished', '进入已结束的桌');
+
+chatClient.send({ t: 'chat', tableId: tableA, text: '这局打得好' });
+const withChat = await waitFor(
+  chatClient,
+  (s) => s.chat.some((message) => message.body === '这局打得好'),
+  '聊天广播',
+);
+assert.equal(withChat.viewers, 2, '爱丽丝开两个连接，加上鲍勃，应算 2 个不同的人');
+console.log(`✓ 聊天与在线人数：${withChat.chat.length} 条消息，${withChat.viewers} 人在看`);
+chatClient.close();
+
+const stats = await api2('/stats/me', { token: alice.token });
+assert.equal(stats.perGame.length, 1, '应有 1 个游戏的战绩');
+assert.equal(stats.perGame[0].games, 1);
+console.log(
+  `✓ 战绩：${stats.perGame[0].gameName} 打了 ${stats.perGame[0].games} 场，胜 ${stats.perGame[0].wins} 场`,
+);
+
+const board = await api2('/leaderboard?gameId=dice', { token: alice.token });
+assert.equal(board.entries.length, 2, '两人都应有评分');
+const totalRating = board.entries.reduce((sum, entry) => sum + entry.rating, 0);
+assert.equal(totalRating, 3000, 'Elo 零和：两人总分应仍是 2 × 1500');
+assert.ok(board.entries[0].rating > 1500, '赢家应该涨分');
+assert.ok(board.entries[1].rating < 1500, '输家应该掉分');
+console.log(
+  `✓ Elo：${board.entries[0].name} ${board.entries[0].rating} / ${board.entries[1].name} ${board.entries[1].rating}（总分守恒）`,
+);
+
+const replayRes = await api2(`/tables/${tableA}/replay`, { token: alice.token });
+const replay = replayRes.replay;
+assert.equal(replay.steps.length, rows.length, '回放步数 = 开局 + 每条动作');
+assert.equal(replay.steps[0].kind, 'start');
+assert.equal(replay.steps.at(-1).view.finished, true, '最后一步应是终局');
+assert.equal(
+  JSON.stringify(replay.steps.at(-1).view).includes('rngSeed'),
+  false,
+  '回放是观战者视角，不应泄漏随机种子',
+);
+console.log(`✓ 回放：${replay.steps.length} 步，末步已结束（观战者视角）`);
+
 /* ------------------------------ 超时兜底 ------------------------------ */
 
-console.log('\n▶ 阶段四：超时兜底');
+console.log('\n▶ 阶段五：超时兜底');
 
 const { id: timeoutTable } = await api2('/tables', {
   token: alice.token,
@@ -343,6 +391,14 @@ const afterTimeout = await waitFor(
   15000,
 );
 console.log(`✓ 无人操作 5 秒后自动走了一步：seq ${started.seq} → ${afterTimeout.seq}`);
+
+// 超时动作也要能回放（否则日志就断了一环）
+const timeoutReplay = await api2(`/tables/${timeoutTable}/replay`, { token: alice.token });
+assert.ok(
+  timeoutReplay.replay.steps.some((step) => step.kind === 'timeout'),
+  '回放里应能看到超时代打的那一步',
+);
+console.log(`✓ 超时动作已入库，回放 ${timeoutReplay.replay.steps.length} 步可见`);
 timeoutClient.close();
 
 /* ------------------------------ 收尾 ------------------------------ */

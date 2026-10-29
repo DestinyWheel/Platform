@@ -164,6 +164,61 @@ export interface TablePlayerInfo {
   bot: boolean;
 }
 
+export interface ChatMessage {
+  id: number;
+  userId: PlayerId;
+  name: string;
+  body: string;
+  at: number;
+}
+
+/* ---------------------- 回放 / 战绩 / 排名 ---------------------- */
+
+export interface ReplayStep {
+  seq: number;
+  kind: string;
+  actor: PlayerId | null;
+  /** 该步的观战者视角 */
+  view: PublicView;
+  /** 截至该步的日志（截取最近若干条） */
+  log: LogEntry[];
+}
+
+export interface ReplayPayload {
+  tableId: string;
+  gameId: string;
+  gameName: string;
+  gameVersion: string;
+  status: TableStatus;
+  players: TablePlayerInfo[];
+  steps: ReplayStep[];
+  truncated: boolean;
+}
+
+export interface LeaderboardEntry {
+  userId: PlayerId;
+  name: string;
+  rating: number;
+  games: number;
+}
+
+export interface PlayerStatsRow {
+  gameId: string;
+  gameName: string;
+  games: number;
+  wins: number;
+}
+
+export interface RecentMatchRow {
+  tableId: string;
+  gameId: string;
+  gameName: string;
+  rank: number;
+  players: number;
+  isWin: boolean;
+  finishedAt: number;
+}
+
 export type TableStatus = 'lobby' | 'playing' | 'finished';
 
 export interface TableSnapshot {
@@ -186,6 +241,10 @@ export interface TableSnapshot {
   activePlayer: PlayerId | null;
   deadlineAt: number | null;
   log: LogEntry[];
+  /** 最近若干条聊天 */
+  chat: ChatMessage[];
+  /** 当前有多少人在看这张桌（含玩家） */
+  viewers: number;
 }
 
 export interface TableSummary {
@@ -203,6 +262,7 @@ export type ClientMessage =
   | { t: 'subscribe'; tableId: string }
   | { t: 'unsubscribe'; tableId: string }
   | { t: 'action'; tableId: string; type: string; payload?: unknown }
+  | { t: 'chat'; tableId: string; text: string }
   | { t: 'ping' };
 
 export type ServerMessage =

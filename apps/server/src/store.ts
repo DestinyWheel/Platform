@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { BaseState, GameManifest, LogEntry, TableStatus } from '@platform/sdk';
+import type { BaseState, ChatMessage, GameManifest, LogEntry, TableStatus } from '@platform/sdk';
 import type { Db } from './db/types.js';
 
 export interface UserRecord {
@@ -76,6 +76,56 @@ export interface Store {
   markVersionFailed(gameId: string, version: string, error: string): Promise<void>;
   /** 事务：把该游戏原 active 版本降级为 retired，再激活指定版本 */
   setActiveVersion(gameId: string, version: string): Promise<void>;
+
+  /* ------------------------- 聊天 / 战绩 ------------------------- */
+  listActions(tableId: string): Promise<ActionRow[]>;
+  appendChat(tableId: string, userId: string, name: string, body: string, at: number): Promise<ChatMessage>;
+  listChat(tableId: string, limit: number): Promise<ChatMessage[]>;
+  /** 幂等：同一桌重复调用不会产生重复战绩 */
+  saveMatchResults(
+    tableId: string,
+    gameId: string,
+    rows: { userId: string; rank: number; players: number; isWin: boolean }[],
+    finishedAt: number,
+  ): Promise<void>;
+  getUserStats(userId: string): Promise<{ gameId: string; games: number; wins: number }[]>;
+  getRecentMatches(userId: string, limit: number): Promise<RecentMatch[]>;
+  /** 这一桌是否已经结算过（防止重复计分） */
+  hasMatchResults(tableId: string): Promise<boolean>;
+
+  /* ------------------------- Elo ------------------------- */
+  getRatings(
+    gameId: string,
+    userIds: string[],
+  ): Promise<Map<string, { rating: number; games: number }>>;
+  applyRatingDeltas(
+    gameId: string,
+    rows: { userId: string; rating: number; games: number }[],
+    now: number,
+  ): Promise<void>;
+  listRatings(
+    gameId: string,
+    limit: number,
+  ): Promise<{ userId: string; name: string; rating: number; games: number }[]>;
+}
+
+export interface ActionRow {
+  seq: number;
+  actor: string | null;
+  kind: 'start' | 'action' | 'timeout';
+  action: unknown;
+  effects: unknown[];
+  stateHash: string;
+  createdAt: number;
+}
+
+export interface RecentMatch {
+  tableId: string;
+  gameId: string;
+  rank: number;
+  players: number;
+  isWin: boolean;
+  finishedAt: number;
 }
 
 export interface GameVersionRecord {
@@ -339,6 +389,194 @@ export class PgStore implements Store {
         [gameId, version, Date.now()],
       );
     });
+  }
+
+  /* ------------------------- 聊天 / 战绩 ------------------------- */
+
+  async listActions(tableId: string): Promise<ActionRow[]> {
+    const rows = await this.db.query<{
+      seq: number;
+      actor: string | null;
+      kind: 'start' | 'action' | 'timeout';
+      action: unknown;
+      effects: unknown[];
+      state_hash: string;
+      created_at: number;
+    }>('SELECT * FROM match_actions WHERE table_id = $1 ORDER BY seq ASC', [tableId]);
+
+    return rows.map((row) => ({
+      seq: Number(row.seq),
+      actor: row.actor,
+      kind: row.kind,
+      action: row.action,
+      effects: row.effects,
+      stateHash: row.state_hash,
+      createdAt: Number(row.created_at),
+    }));
+  }
+
+  async appendChat(
+    tableId: string,
+    userId: string,
+    name: string,
+    body: string,
+    at: number,
+  ): Promise<ChatMessage> {
+    const rows = await this.db.query<{ id: string }>(
+      `INSERT INTO table_chat (table_id, user_id, name, body, created_at)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [tableId, userId, name, body, at],
+    );
+    return { id: Number(rows[0]?.id ?? 0), userId, name, body, at };
+  }
+
+  async listChat(tableId: string, limit: number): Promise<ChatMessage[]> {
+    const rows = await this.db.query<{
+      id: string;
+      user_id: string;
+      name: string;
+      body: string;
+      created_at: number;
+    }>(
+      `SELECT id, user_id, name, body, created_at FROM table_chat
+        WHERE table_id = $1 ORDER BY id DESC LIMIT $2`,
+      [tableId, limit],
+    );
+
+    return rows
+      .map((row) => ({
+        id: Number(row.id),
+        userId: row.user_id,
+        name: row.name,
+        body: row.body,
+        at: Number(row.created_at),
+      }))
+      .reverse();
+  }
+
+  async saveMatchResults(
+    tableId: string,
+    gameId: string,
+    rows: { userId: string; rank: number; players: number; isWin: boolean }[],
+    finishedAt: number,
+  ): Promise<void> {
+    for (const row of rows) {
+      await this.db.execute(
+        `INSERT INTO match_results (table_id, user_id, game_id, rank, players, is_win, finished_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (table_id, user_id) DO NOTHING`,
+        [tableId, row.userId, gameId, row.rank, row.players, row.isWin, finishedAt],
+      );
+    }
+  }
+
+  async getUserStats(userId: string): Promise<{ gameId: string; games: number; wins: number }[]> {
+    const rows = await this.db.query<{ game_id: string; games: number; wins: number }>(
+      `SELECT game_id,
+              count(*)::int AS games,
+              sum(CASE WHEN is_win THEN 1 ELSE 0 END)::int AS wins
+         FROM match_results
+        WHERE user_id = $1
+        GROUP BY game_id
+        ORDER BY games DESC`,
+      [userId],
+    );
+    return rows.map((row) => ({
+      gameId: row.game_id,
+      games: Number(row.games),
+      wins: Number(row.wins),
+    }));
+  }
+
+  async getRecentMatches(userId: string, limit: number): Promise<RecentMatch[]> {
+    const rows = await this.db.query<{
+      table_id: string;
+      game_id: string;
+      rank: number;
+      players: number;
+      is_win: boolean;
+      finished_at: number;
+    }>(
+      `SELECT table_id, game_id, rank, players, is_win, finished_at
+         FROM match_results WHERE user_id = $1 ORDER BY finished_at DESC LIMIT $2`,
+      [userId, limit],
+    );
+    return rows.map((row) => ({
+      tableId: row.table_id,
+      gameId: row.game_id,
+      rank: Number(row.rank),
+      players: Number(row.players),
+      isWin: Boolean(row.is_win),
+      finishedAt: Number(row.finished_at),
+    }));
+  }
+
+  async hasMatchResults(tableId: string): Promise<boolean> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM match_results WHERE table_id = $1',
+      [tableId],
+    );
+    return Number(rows[0]?.n ?? 0) > 0;
+  }
+
+  /* ------------------------- Elo ------------------------- */
+
+  async getRatings(
+    gameId: string,
+    userIds: string[],
+  ): Promise<Map<string, { rating: number; games: number }>> {
+    const result = new Map<string, { rating: number; games: number }>();
+    if (userIds.length === 0) return result;
+
+    const rows = await this.db.query<{ user_id: string; rating: number; games: number }>(
+      'SELECT user_id, rating, games FROM ratings WHERE game_id = $1 AND user_id = ANY($2::text[])',
+      [gameId, userIds],
+    );
+    for (const row of rows) {
+      result.set(row.user_id, { rating: Number(row.rating), games: Number(row.games) });
+    }
+    return result;
+  }
+
+  async applyRatingDeltas(
+    gameId: string,
+    rows: { userId: string; rating: number; games: number }[],
+    now: number,
+  ): Promise<void> {
+    for (const row of rows) {
+      await this.db.execute(
+        `INSERT INTO ratings (game_id, user_id, rating, games, updated_at)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (game_id, user_id) DO UPDATE SET
+           rating = EXCLUDED.rating, games = EXCLUDED.games, updated_at = EXCLUDED.updated_at`,
+        [gameId, row.userId, row.rating, row.games, now],
+      );
+    }
+  }
+
+  async listRatings(
+    gameId: string,
+    limit: number,
+  ): Promise<{ userId: string; name: string; rating: number; games: number }[]> {
+    const rows = await this.db.query<{
+      user_id: string;
+      name: string;
+      rating: number;
+      games: number;
+    }>(
+      `SELECT r.user_id, u.name, r.rating, r.games
+         FROM ratings r JOIN users u ON u.id = r.user_id
+        WHERE r.game_id = $1
+        ORDER BY r.rating DESC, r.games DESC
+        LIMIT $2`,
+      [gameId, limit],
+    );
+    return rows.map((row) => ({
+      userId: row.user_id,
+      name: row.name,
+      rating: Number(row.rating),
+      games: Number(row.games),
+    }));
   }
 }
 
