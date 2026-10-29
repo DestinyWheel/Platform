@@ -479,6 +479,10 @@ CREATE TABLE match_actions (
 -- 其余：users / table_players / elo / replay_views
 ```
 
+**账号**：昵称即登录名，密码用 scrypt（`scrypt$N$r$p$salt$hash`）存；JWT 里带
+`ver`，和 `users.token_version` 对不上就作废——改密码、退出登录都靠它立即生效。
+详见 [auth.md](./auth.md)。
+
 **快照**：每 50 步或每次进入 `global` 状态时把 `state` 存一份到 `match_snapshots`，回放从最近快照开始，避免千步重放。
 
 ---

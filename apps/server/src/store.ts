@@ -8,6 +8,16 @@ export interface UserRecord {
   createdAt: number;
   /** 第一个注册的人自动成为管理员（私人平台够用，M3 再加角色表） */
   isAdmin: boolean;
+  /** false = 旧版昵称登录留下的账号，还没设过密码 */
+  hasPassword: boolean;
+  /** 令牌版本；和 JWT 里的 ver 对不上就说明这次会话已被作废 */
+  tokenVersion: number;
+  lastLoginAt: number | null;
+}
+
+/** 只在登录校验时用；命名上带 secret，避免被顺手塞进接口返回值 */
+export interface UserWithSecret extends UserRecord {
+  passwordHash: string | null;
 }
 
 export interface TablePlayer {
@@ -53,9 +63,17 @@ export interface TableWrite {
 }
 
 export interface Store {
-  findOrCreateUser(name: string): Promise<UserRecord>;
+  findUserName(name: string): Promise<UserRecord | undefined>;
+  findUserWithSecret(name: string): Promise<UserWithSecret | undefined>;
+  /** 重名返回 null（靠 name 的唯一索引兜底，不靠"先查再插"） */
+  createUser(name: string, passwordHash: string | null): Promise<UserRecord | null>;
   getUser(id: string): Promise<UserRecord | undefined>;
   countUsers(): Promise<number>;
+  /** 设密码（注册后补设 / 认领 / 管理员重置）并作废所有旧令牌，返回新的 token_version */
+  setPassword(id: string, passwordHash: string): Promise<number>;
+  /** 退出登录：作废所有旧令牌 */
+  bumpTokenVersion(id: string): Promise<number>;
+  touchLogin(id: string): Promise<void>;
 
   createTable(record: TableRecord): Promise<void>;
   getTable(id: string): Promise<TableRecord | undefined>;
@@ -186,48 +204,94 @@ function toRecord(row: TableRow): TableRecord {
   };
 }
 
+/** 常规查询列；密码哈希**不在**这里，只有 findUserWithSecret 才显式取 */
+const USER_COLUMNS = 'id, name, created_at, is_admin, token_version, last_login_at, password_set_at';
+
+interface UserRow {
+  id: string;
+  name: string;
+  created_at: number;
+  is_admin: boolean;
+  password_hash?: string | null;
+  token_version: number;
+  last_login_at: number | null;
+  password_set_at: number | null;
+}
+
+function toUser(row: UserRow): UserRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: Number(row.created_at),
+    isAdmin: Boolean(row.is_admin),
+    hasPassword: row.password_set_at !== null,
+    tokenVersion: Number(row.token_version ?? 0),
+    lastLoginAt: row.last_login_at === null ? null : Number(row.last_login_at),
+  };
+}
+
 export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
-  async findOrCreateUser(name: string): Promise<UserRecord> {
-    // 第一个注册的人自动成为管理员
-    const isFirst = (await this.countUsers()) === 0;
+  async findUserName(name: string): Promise<UserRecord | undefined> {
+    const rows = await this.db.query<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE name = $1`, [name]);
+    const row = rows[0];
+    return row ? toUser(row) : undefined;
+  }
 
-    // 同名并发登录时靠唯一索引兜底，冲突了就回读
-    await this.db.execute(
-      `INSERT INTO users (id, name, created_at, is_admin)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (name) DO NOTHING`,
-      [randomUUID(), name, Date.now(), isFirst],
-    );
-
-    const rows = await this.db.query<{ id: string; name: string; created_at: number; is_admin: boolean }>(
-      'SELECT id, name, created_at, is_admin FROM users WHERE name = $1',
+  async findUserWithSecret(name: string): Promise<UserWithSecret | undefined> {
+    const rows = await this.db.query<UserRow>(
+      `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE name = $1`,
       [name],
     );
     const row = rows[0];
-    if (!row) throw new Error(`无法创建用户：${name}`);
-    return {
-      id: row.id,
-      name: row.name,
-      createdAt: Number(row.created_at),
-      isAdmin: Boolean(row.is_admin),
-    };
+    return row ? { ...toUser(row), passwordHash: row.password_hash ?? null } : undefined;
+  }
+
+  async createUser(name: string, passwordHash: string | null): Promise<UserRecord | null> {
+    // 第一个注册的人自动成为管理员。is_admin 在 SQL 里算，省掉"先 count 再插"的竞态
+    const now = Date.now();
+    const rows = await this.db.query<{ id: string }>(
+      `INSERT INTO users (id, name, created_at, is_admin, password_hash, password_set_at, last_login_at)
+       VALUES ($1, $2, $3, NOT EXISTS (SELECT 1 FROM users), $4, $5, $6)
+       ON CONFLICT (name) DO NOTHING
+       RETURNING id`,
+      [randomUUID(), name, now, passwordHash, passwordHash ? now : null, now],
+    );
+    if (rows.length === 0) return null;
+    return (await this.getUser(rows[0]!.id)) ?? null;
   }
 
   async getUser(id: string): Promise<UserRecord | undefined> {
-    const rows = await this.db.query<{ id: string; name: string; created_at: number; is_admin: boolean }>(
-      'SELECT id, name, created_at, is_admin FROM users WHERE id = $1',
-      [id],
-    );
+    const rows = await this.db.query<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [id]);
     const row = rows[0];
-    return row
-      ? { id: row.id, name: row.name, createdAt: Number(row.created_at), isAdmin: Boolean(row.is_admin) }
-      : undefined;
+    return row ? toUser(row) : undefined;
   }
 
   async countUsers(): Promise<number> {
     const rows = await this.db.query<{ n: number }>('SELECT count(*)::int AS n FROM users');
     return Number(rows[0]?.n ?? 0);
+  }
+
+  async setPassword(id: string, passwordHash: string): Promise<number> {
+    const rows = await this.db.query<{ token_version: number }>(
+      `UPDATE users SET password_hash = $2, password_set_at = $3, token_version = token_version + 1
+        WHERE id = $1 RETURNING token_version`,
+      [id, passwordHash, Date.now()],
+    );
+    return Number(rows[0]?.token_version ?? 0);
+  }
+
+  async bumpTokenVersion(id: string): Promise<number> {
+    const rows = await this.db.query<{ token_version: number }>(
+      'UPDATE users SET token_version = token_version + 1 WHERE id = $1 RETURNING token_version',
+      [id],
+    );
+    return Number(rows[0]?.token_version ?? 0);
+  }
+
+  async touchLogin(id: string): Promise<void> {
+    await this.db.execute('UPDATE users SET last_login_at = $2 WHERE id = $1', [id, Date.now()]);
   }
 
   async createTable(record: TableRecord): Promise<void> {

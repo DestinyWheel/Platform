@@ -86,10 +86,10 @@ export class WorkerPluginRuntime implements PluginRuntime {
     entry: string,
     hash: string,
   ) {
-    this.worker = new Worker(new URL('./worker.ts', import.meta.url), {
+    // 入口走 worker-boot.mjs：TS 的加载钩子必须在 worker 线程里自己注册一份，
+    // 父线程的 tsx loader 不会被继承（详见 worker-boot.mjs 的注释）
+    this.worker = new Worker(new URL('./worker-boot.mjs', import.meta.url), {
       workerData: { entry, hash },
-      // 开发态直接用 tsx 跑 TS，worker 也需要同一套 loader
-      execArgv: process.execArgv,
       resourceLimits: { maxOldGenerationSizeMb: 256 },
     });
 

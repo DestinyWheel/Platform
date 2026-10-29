@@ -11,9 +11,9 @@ pnpm install
 pnpm dev          # 同时起 server(8787) + web(5173)
 ```
 
-打开 <http://127.0.0.1:5173>，输入昵称进入。开一张桌，把地址复制到另一个浏览器（或无痕窗口）用另一个昵称加入，房主点「开始游戏」。
+打开 <http://127.0.0.1:5173>，注册一个账号（**第一个注册的人自动成为管理员**）。开一张桌，把地址复制到另一个浏览器（或无痕窗口），用另一个账号加入，房主点「开始游戏」。
 
-> 同一个昵称 = 同一个身份。想模拟两个人，用两个浏览器 profile 或无痕窗口。
+> 昵称就是登录名，密码用 scrypt 存。细节见 [docs/auth.md](docs/auth.md)。
 >
 > **数据库零配置**：默认用 PGlite（嵌入式 Postgres，WASM），数据落在 `.data/pg`。要连真 Postgres，设 `DATABASE_URL=postgres://user:pass@host/db` 即可，SQL 和迁移完全一样。
 >
@@ -24,7 +24,7 @@ pnpm dev          # 同时起 server(8787) + web(5173)
 ```bash
 pnpm typecheck    # 全仓库类型检查
 pnpm build        # 构建前端到 apps/web/dist
-pnpm smoke        # 端到端：八段，从对局到限流/备份全跑一遍
+pnpm smoke        # 端到端：十一段，从注册登录到对局/限流/备份全跑一遍
 pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 ```
 

@@ -11,6 +11,7 @@
  * 用法：pnpm smoke
  */
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import {
   cpSync,
   mkdirSync,
@@ -140,7 +141,12 @@ async function rollOnce(clients, tableId) {
 function buildPackage(version) {
   const dir = path.join(pkgDir, `dice-${version}`);
   mkdirSync(dir, { recursive: true });
-  cpSync(path.join(repoRoot, 'games', 'dice'), dir, { recursive: true });
+  // 不带 node_modules：插件包里本来就不该有依赖目录（依赖由宿主解析），
+  // 而且里面是 pnpm 的符号链接，Windows 上复制链接会直接 EPERM
+  cpSync(path.join(repoRoot, 'games', 'dice'), dir, {
+    recursive: true,
+    filter: (source) => !source.split(path.sep).includes('node_modules'),
+  });
 
   const manifestPath = path.join(dir, 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -171,8 +177,36 @@ const db1 = await createDb({ dataDir });
 const server1 = await startServer(db1);
 const api1 = makeApi(server1.base);
 
-const alice = await api1('/auth/login', { method: 'POST', body: { name: '爱丽丝' } });
-const bob = await api1('/auth/login', { method: 'POST', body: { name: '鲍勃' } });
+/** 冒烟用的固定口令；强度够过校验，也不在常见弱口令表里 */
+const PASSWORD = {
+  alice: 'alice-smoke-2024',
+  bob: 'bob-smoke-2024',
+  watcher: 'watcher-smoke-2024',
+};
+
+async function registerUser(api, name, password, extra = {}) {
+  return api('/auth/register', {
+    method: 'POST',
+    body: { name, password, confirm: password, ...extra },
+  });
+}
+
+/** 断言这个请求确实失败，并且是预期的状态码和错误码 */
+async function expectFailure(promise, status, code, label) {
+  try {
+    await promise;
+  } catch (error) {
+    assert.equal(error.status, status, `${label}：期望 ${status}，实际 ${error.status}`);
+    assert.equal(error.body?.code, code, `${label}：期望 code=${code}，实际 ${JSON.stringify(error.body)}`);
+    return error;
+  }
+  throw new Error(`${label}：期望失败但成功了`);
+}
+
+const alice = await registerUser(api1, '爱丽丝', PASSWORD.alice);
+const bob = await registerUser(api1, '鲍勃', PASSWORD.bob);
+assert.equal(alice.user.isAdmin, true, '第一个注册的人应该是管理员');
+assert.equal(bob.user.isAdmin, false, '第二个人不是管理员');
 
 const games1 = await api1('/games');
 assert.ok(games1.games.length >= 2, `应自动发布多个游戏，实际 ${games1.games.length}`);
@@ -460,7 +494,7 @@ console.log(
 );
 
 // 观战者视角：谁都看不到手牌
-const watcher = await api2('/auth/login', { method: 'POST', body: { name: '旁观者' } });
+const watcher = await registerUser(api2, '旁观者', PASSWORD.watcher);
 const watcherWs = connect(server2.wsBase, watcher.token);
 await watcherWs.ready;
 watcherWs.send({ t: 'subscribe', tableId: mandalaTable });
@@ -717,6 +751,97 @@ const afterEnd = await waitFor(calmWs, (s) => s.seq > afterUndo.seq, '结束回�
 assert.equal(afterEnd.activePlayer, bob.user.id, '只有主动结束回合才换人');
 console.log('✓ 主动「结束回合」才换人');
 calmWs.close();
+
+/* ------------------------------ 账号 ------------------------------ */
+
+console.log('\n▶ 阶段十一：注册 / 登录 / 登出 / 改密码');
+
+await expectFailure(registerUser(api2, '鲍勃', 'another-pass-1'), 409, 'name_taken', '重名注册');
+await expectFailure(registerUser(api2, '查理', '12345678'), 400, 'weak_password', '弱口令注册');
+await expectFailure(
+  api2('/auth/login', { method: 'POST', body: { name: '鲍勃', password: 'wrong-pass-1' } }),
+  401,
+  'invalid_credentials',
+  '密码错误',
+);
+await expectFailure(
+  api2('/auth/login', { method: 'POST', body: { name: '查无此人', password: 'nobody-pass-1' } }),
+  401,
+  'invalid_credentials',
+  '账号不存在',
+);
+console.log('✓ 重名 409、弱口令 400、密码错/账号不存在都是 401 且不泄露"这个昵称在不在"');
+
+const bobRelogin = await api2('/auth/login', {
+  method: 'POST',
+  body: { name: '鲍勃', password: PASSWORD.bob },
+});
+assert.equal(bobRelogin.user.id, bob.user.id, '重新登录应回到同一个账号');
+console.log('✓ 密码正确时回到原账号（id 不变）');
+
+const charlie = await registerUser(api2, '查理', 'charlie-smoke-2024');
+assert.equal(charlie.user.isAdmin, false);
+
+// 改密码后旧令牌必须立刻失效——这是 token_version 存在的唯一理由
+const charlieRenewed = await api2('/auth/password', {
+  token: charlie.token,
+  method: 'POST',
+  body: { oldPassword: 'charlie-smoke-2024', newPassword: 'charlie-smoke-2025' },
+});
+await expectFailure(
+  api2('/me', { token: charlie.token }),
+  401,
+  'unauthorized',
+  '改密码后的旧令牌',
+);
+const charlieMe = await api2('/me', { token: charlieRenewed.token });
+assert.equal(charlieMe.user.id, charlie.user.id, '新令牌应该仍然有效');
+await expectFailure(
+  api2('/auth/login', {
+    method: 'POST',
+    body: { name: '查理', password: 'charlie-smoke-2024' },
+  }),
+  401,
+  'invalid_credentials',
+  '用旧密码登录',
+);
+console.log('✓ 改密码：旧令牌失效、新令牌可用、旧密码登不进');
+
+const charlieFinal = await api2('/auth/login', {
+  method: 'POST',
+  body: { name: '查理', password: 'charlie-smoke-2025' },
+});
+await api2('/auth/logout', { token: charlieFinal.token, method: 'POST' });
+await expectFailure(api2('/me', { token: charlieFinal.token }), 401, 'unauthorized', '登出后的旧令牌');
+console.log('✓ 退出登录后令牌立刻作废（不只是前端删一下 localStorage）');
+
+// 旧版本"输昵称即登录"留下的账号：没有密码，登录时提示去认领
+const legacyId = randomUUID();
+await db2.execute(
+  `INSERT INTO users (id, name, created_at, is_admin, password_hash, token_version)
+   VALUES ($1, $2, $3, false, NULL, 0)`,
+  [legacyId, '老账号', Date.now()],
+);
+await expectFailure(
+  api2('/auth/login', { method: 'POST', body: { name: '老账号', password: 'anything-1' } }),
+  409,
+  'password_not_set',
+  '老账号直接登录',
+);
+const claimed = await api2('/auth/claim', {
+  method: 'POST',
+  body: { name: '老账号', password: 'legacy-pass-1' },
+});
+assert.equal(claimed.user.id, legacyId, '认领应落在原来那条记录上，战绩不丢');
+const legacyMe = await api2('/me', { token: claimed.token });
+assert.equal(legacyMe.user.id, legacyId);
+await expectFailure(
+  api2('/auth/claim', { method: 'POST', body: { name: '老账号', password: 'legacy-pass-2' } }),
+  409,
+  'claim_unavailable',
+  '已认领的账号再认领',
+);
+console.log('✓ 老账号可认领一次，认领后原 id 不变、不能重复认领');
 
 /* ------------------------------ 收尾 ------------------------------ */
 

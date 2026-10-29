@@ -307,6 +307,8 @@ export type ServerMessage =
 export interface AuthUser {
   id: PlayerId;
   name: string;
+  /** 管理员才有的管理端入口（插件上传、指标、备份） */
+  isAdmin?: boolean;
 }
 
 /* 前端插件契约（框架无关的 mount / update / unmount） */

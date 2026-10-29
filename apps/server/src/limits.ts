@@ -73,8 +73,15 @@ export class RateLimiter {
 
 /** 把一组限流规则打成一个方便调用的集合 */
 export class Limiters {
-  /** 登录：按 IP，防撞库/刷账号 */
-  readonly login = new RateLimiter(10, 10 / 60);
+  /** 登录/注册：按 IP，防撞库、防批量注册。一次密码校验要跑 scrypt，本身也吃掉服务端 CPU */
+  readonly login = new RateLimiter(20, 20 / 60);
+  /**
+   * 按账号名的失败计数：只在校验失败时扣。
+   *
+   * 只管 IP 挡不住分布式撞库——换个 IP 就能接着试同一个账号。
+   * 管账号名之后，攻击面从"每个 IP 5 次"变成"这个账号 5 次"。
+   */
+  readonly loginFailure = new RateLimiter(5, 5 / 300);
   /** 建桌：按用户 */
   readonly createTable = new RateLimiter(20, 20 / 60);
   /** 聊天：按用户，1 秒 1 条、允许 3 条突发 */
@@ -85,7 +92,14 @@ export class Limiters {
   readonly upload = new RateLimiter(5, 5 / 60);
 
   sweep(): void {
-    for (const limiter of [this.login, this.createTable, this.chat, this.action, this.upload]) {
+    for (const limiter of [
+      this.login,
+      this.loginFailure,
+      this.createTable,
+      this.chat,
+      this.action,
+      this.upload,
+    ]) {
       limiter.sweep();
     }
   }

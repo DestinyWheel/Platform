@@ -7,7 +7,8 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
-import { bearerFrom, signToken, verifyToken } from './auth.js';
+import { AuthError, bearerFrom, signToken, verifyToken } from './auth.js';
+import { checkPasswordInput, hashPassword, verifyPassword } from './password.js';
 import { EventBus } from './bus.js';
 import { createDb, migrate, type Db } from './db/index.js';
 import { Limiters, RateLimiter, RateLimitExceeded, checkLimit } from './limits.js';
@@ -23,9 +24,37 @@ import { registerWebSocket } from './ws.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
-const loginSchema = z.object({
-  name: z.string().trim().min(2, '昵称至少 2 个字符').max(20, '昵称最多 20 个字符'),
+/**
+ * 昵称就是登录名，所以长度和字符要收一收：
+ * - 去掉首尾空格后 2–20 字
+ * - 不允许控制字符（会把日志和终端搞乱）
+ */
+const nameField = z
+  .string()
+  .trim()
+  .min(2, '昵称至少 2 个字符')
+  .max(20, '昵称最多 20 个字符')
+  .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), '昵称里有非法字符');
+
+const credentialsSchema = z.object({
+  name: nameField,
+  // 登录时不校验强度，否则将来收紧规则会把老用户锁在门外；只在注册/改密时校验
+  password: z.string().min(1, '请输入密码').max(200, '密码太长了'),
+  remember: z.boolean().optional(),
 });
+
+const registerSchema = credentialsSchema.extend({
+  confirm: z.string().optional(),
+  code: z.string().optional(),
+});
+
+const changePasswordSchema = z.object({
+  oldPassword: z.string().min(1, '请输入原密码').max(200),
+  newPassword: z.string().min(1, '请输入新密码').max(200),
+});
+
+/** 邀请码：设了 REGISTER_CODE 就变成"凭码注册"，不设就是开放注册 */
+const REGISTER_CODE = process.env.REGISTER_CODE?.trim() || null;
 
 const createTableSchema = z.object({
   gameId: z.string().min(1),
@@ -129,6 +158,10 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     if (!auth) throw new ServiceError('unauthorized', '请先登录');
     const user = await store.getUser(auth.id);
     if (!user) throw new ServiceError('unauthorized', '用户不存在，请重新登录');
+    // 改密码 / 退出登录会把 token_version +1，这里一比就让旧令牌失效
+    if (auth.ver !== user.tokenVersion) {
+      throw new ServiceError('unauthorized', '登录状态已失效，请重新登录');
+    }
     return user;
   };
 
@@ -189,19 +222,141 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     };
   });
 
+  /* ------------------------------ 账号 ------------------------------ */
+
+  const publicUser = (user: UserRecord): { id: string; name: string; isAdmin: boolean } => ({
+    id: user.id,
+    name: user.name,
+    isAdmin: user.isAdmin,
+  });
+
+  const issue = (
+    user: UserRecord,
+    remember: boolean,
+    tokenVersion = user.tokenVersion,
+  ): { token: string; user: { id: string; name: string; isAdmin: boolean } } => ({
+    token: signToken(user, { remember, tokenVersion }),
+    user: publicUser(user),
+  });
+
+  /** 登录页要知道"要不要填邀请码"，这一步必须在未登录时就能问 */
+  app.get('/api/auth/config', async () => ({
+    registration: REGISTER_CODE ? 'code' : 'open',
+    /** 老账号可以自助认领密码；管理员补完密码后可以设 AUTH_ALLOW_CLAIM=0 关掉 */
+    allowClaim: process.env.AUTH_ALLOW_CLAIM !== '0',
+  }));
+
+  app.post('/api/auth/register', async (request) => {
+    checkLimit(limits.login.take(request.ip));
+    const input = registerSchema.parse(request.body);
+
+    if (REGISTER_CODE && input.code !== REGISTER_CODE) {
+      throw new AuthError('bad_code', '邀请码不对', 403);
+    }
+    if (input.confirm !== undefined && input.confirm !== input.password) {
+      throw new AuthError('password_mismatch', '两次输入的密码不一样', 400);
+    }
+    const problem = checkPasswordInput(input.password, input.name);
+    if (problem) throw new AuthError('weak_password', problem, 400);
+
+    const hash = await hashPassword(input.password);
+    const user = await store.createUser(input.name, hash);
+    if (!user) throw new AuthError('name_taken', '这个昵称已经被占用了', 409);
+
+    request.log.info({ userId: user.id, name: user.name, isAdmin: user.isAdmin }, '注册');
+    metrics.inc('auth.registered');
+    return issue(user, input.remember ?? false);
+  });
+
   app.post('/api/auth/login', async (request) => {
     checkLimit(limits.login.take(request.ip));
-    const { name } = loginSchema.parse(request.body);
-    const user = await store.findOrCreateUser(name);
-    return {
-      token: signToken({ id: user.id, name: user.name }),
-      user: { id: user.id, name: user.name, isAdmin: user.isAdmin },
-    };
+    const input = credentialsSchema.parse(request.body);
+
+    // 按账号名限流：IP 限流挡不住换 IP 撞同一个账号
+    const failureKey = input.name.toLowerCase();
+
+    const record = await store.findUserWithSecret(input.name);
+    if (!record) throw new AuthError('invalid_credentials', '昵称或密码不对', 401);
+
+    // 老账号（旧版昵称登录留下的）还没密码，引导前端走"认领"。
+    // 这一步放在失败计数之前：用户还没输密码，不该让他先被锁一次
+    if (!record.hasPassword) {
+      throw new AuthError('password_not_set', '这个账号还没设密码，先设一个', 409);
+    }
+
+    checkLimit(limits.loginFailure.take(failureKey));
+    if (!(await verifyPassword(input.password, record.passwordHash))) {
+      metrics.inc('auth.login_failed');
+      throw new AuthError('invalid_credentials', '昵称或密码不对', 401);
+    }
+
+    limits.loginFailure.reset(failureKey);
+    await store.touchLogin(record.id);
+    metrics.inc('auth.login');
+    return issue(record, input.remember ?? false);
+  });
+
+  /**
+   * 认领：给"旧版昵称登录"创建的账号补一个密码。
+   *
+   * 这确实意味着知道昵称的人可以先占位——但那正是升级前整个平台的安全水位，
+   * 不算退步。管理员把自己关心的账号都设上密码之后，AUTH_ALLOW_CLAIM=0 关掉即可。
+   */
+  app.post('/api/auth/claim', async (request) => {
+    checkLimit(limits.login.take(request.ip));
+    if (process.env.AUTH_ALLOW_CLAIM === '0') {
+      throw new AuthError('claim_disabled', '认领通道已关闭，请联系管理员重置密码', 403);
+    }
+    const input = credentialsSchema.parse(request.body);
+
+    const record = await store.findUserWithSecret(input.name);
+    if (!record || record.hasPassword) {
+      throw new AuthError('claim_unavailable', '这个昵称没有待认领的账号', 409);
+    }
+
+    const problem = checkPasswordInput(input.password, input.name);
+    if (problem) throw new AuthError('weak_password', problem, 400);
+
+    const tokenVersion = await store.setPassword(record.id, await hashPassword(input.password));
+    request.log.info({ userId: record.id, name: record.name }, '账号认领');
+
+    return issue(record, input.remember ?? false, tokenVersion);
+  });
+
+  /** 改密码：验原密码，成功后作废所有旧令牌并下发新令牌 */
+  app.post('/api/auth/password', async (request) => {
+    const user = await requireUser(request);
+    const input = changePasswordSchema.parse(request.body);
+
+    checkLimit(limits.loginFailure.take(`pw:${user.id}`));
+    const record = await store.findUserWithSecret(user.name);
+    if (!record || !(await verifyPassword(input.oldPassword, record.passwordHash))) {
+      throw new AuthError('invalid_credentials', '原密码不对', 401);
+    }
+    if (input.oldPassword === input.newPassword) {
+      throw new AuthError('same_password', '新密码和原密码一样', 400);
+    }
+    const problem = checkPasswordInput(input.newPassword, user.name);
+    if (problem) throw new AuthError('weak_password', problem, 400);
+
+    limits.loginFailure.reset(`pw:${user.id}`);
+    const tokenVersion = await store.setPassword(user.id, await hashPassword(input.newPassword));
+    request.log.info({ userId: user.id }, '修改密码');
+    metrics.inc('auth.password_changed');
+
+    return issue(user, false, tokenVersion);
+  });
+
+  /** 退出登录：令牌版本 +1，所有设备上的旧令牌立刻失效 */
+  app.post('/api/auth/logout', async (request) => {
+    const user = await requireUser(request);
+    await store.bumpTokenVersion(user.id);
+    return { ok: true };
   });
 
   app.get('/api/me', async (request) => {
     const user = await requireUser(request);
-    return { user: { id: user.id, name: user.name, isAdmin: user.isAdmin } };
+    return { user: publicUser(user) };
   });
 
   app.get('/api/games', async () => ({ games: host.listActive() }));
@@ -336,6 +491,9 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         .header('retry-after', seconds)
         .send({ code: 'rate_limited', message: `操作太频繁，${seconds} 秒后再试` });
     }
+    if (error instanceof AuthError) {
+      return reply.code(error.status).send({ code: error.code, message: error.message });
+    }
     if (error instanceof ServiceError) {
       const status =
         error.code === 'unauthorized' ? 401 : error.code === 'forbidden' ? 403 : 400;
@@ -372,7 +530,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   /* ----------------------------- WebSocket ----------------------------- */
 
-  await registerWebSocket(app, service, bus, presence, { limits, metrics });
+  await registerWebSocket(app, service, bus, presence, { limits, metrics, store });
 
   /* ----------------------------- 超时调度 ----------------------------- */
 

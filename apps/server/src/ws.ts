@@ -8,10 +8,13 @@ import type { Limiters } from './limits.js';
 import type { Metrics } from './metrics.js';
 import type { Presence } from './presence.js';
 import { ServiceError, type TableService } from './service.js';
+import type { Store } from './store.js';
 
 export interface WebSocketDeps {
   limits: Limiters;
   metrics: Metrics;
+  /** 鉴权要读一次用户，才能校验令牌版本（改密码/登出后旧连接凭证立刻无效） */
+  store: Store;
 }
 
 /**
@@ -29,15 +32,18 @@ export async function registerWebSocket(
 ): Promise<void> {
   await app.register(websocket);
 
-  app.get('/ws', { websocket: true }, (socket, request: FastifyRequest) => {
+  app.get('/ws', { websocket: true }, async (socket, request: FastifyRequest) => {
     const url = new URL(request.url, 'http://localhost');
-    const user = verifyToken(url.searchParams.get('token'));
+    const auth = verifyToken(url.searchParams.get('token'));
 
-    if (!user) {
+    // 光验签名不够：还得确认这个令牌没被作废（改密码、退出登录会把它作废）
+    const user = auth ? await deps.store.getUser(auth.id) : undefined;
+    if (!auth || !user || user.tokenVersion !== auth.ver) {
       deps.metrics.inc('ws.unauthorized');
       socket.close(4401, 'unauthorized');
       return;
     }
+
 
     const { limits, metrics } = deps;
     const subscriptions = new Map<string, () => void>();

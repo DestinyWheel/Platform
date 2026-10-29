@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { loadSession, saveSession, setAuthToken, type Session } from './api';
+import { useEffect, useRef, useState } from 'react';
+import { api, loadSession, saveSession, setAuthToken, setUnauthorizedHandler, type Session } from './api';
 import { Lobby } from './views/Lobby';
 import { Login } from './views/Login';
 import { ReplayView } from './views/ReplayView';
@@ -30,10 +30,26 @@ function writeHash(view: View): void {
 export function App() {
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [view, setView] = useState<View>(() => readHash());
+  const [notice, setNotice] = useState<string | null>(null);
+  /** 401 处理要知道"当前是不是已登录"：未登录时密码输错也是 401，不该弹"登录已过期" */
+  const authedRef = useRef(false);
 
   useEffect(() => {
+    authedRef.current = session !== null;
     setAuthToken(session?.token ?? null);
   }, [session]);
+
+  // 任何接口回了 401（令牌过期、改过密码、在别处退出）都回到登录页，而不是卡在报错的页面上
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      if (!authedRef.current) return;
+      authedRef.current = false;
+      saveSession(null);
+      setNotice('登录状态已过期，请重新登录');
+      setSession(null);
+    });
+    return () => setUnauthorizedHandler(null);
+  }, []);
 
   useEffect(() => {
     const onHashChange = () => setView(readHash());
@@ -49,8 +65,10 @@ export function App() {
   if (!session) {
     return (
       <Login
+        notice={notice}
         onLogin={(next) => {
           saveSession(next);
+          setNotice(null);
           setSession(next);
           navigate({ name: 'lobby' });
         }}
@@ -78,7 +96,14 @@ export function App() {
       session={session}
       onOpen={(id) => navigate({ name: 'table', id })}
       onReplay={(id) => navigate({ name: 'replay', id })}
+      onSession={(next) => {
+        saveSession(next);
+        setSession(next);
+      }}
       onLogout={() => {
+        // 先让服务端把令牌作废（token_version +1），再清本地；
+        // 失败也没关系——本地已经清掉了，服务端那份留到过期也进不来这个设备
+        void api.logout().catch(() => undefined);
         saveSession(null);
         setSession(null);
         navigate({ name: 'lobby' });
