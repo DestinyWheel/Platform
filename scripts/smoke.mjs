@@ -671,6 +671,53 @@ assert.ok(botActions.length >= 1, '动作日志里应有机器人提交的动作
 console.log(`✓ 机器人动作已入库（${botActions.length} 条，actor 形如 bot:…）`);
 botWs.close();
 
+/* ------------------------------ 撤销 / 不限时 ------------------------------ */
+
+console.log('\n▶ 阶段十：回合内撤销 / 不限时房间');
+
+const { id: calmTable } = await createTableWithRetry(api2, alice.token, {
+  gameId: 'mandala',
+  maxPlayers: 2,
+  options: { untimed: true, turnMs: 0 },
+});
+await api2(`/tables/${calmTable}/join`, { token: bob.token, method: 'POST' });
+await api2(`/tables/${calmTable}/start`, { token: alice.token, method: 'POST' });
+
+const calmWs = connect(server2.wsBase, alice.token);
+await calmWs.ready;
+calmWs.send({ t: 'subscribe', tableId: calmTable });
+
+const calmOpened = await waitFor(calmWs, (s) => s.status === 'playing', '不限时桌开局');
+assert.equal(calmOpened.deadlineAt, null, '不限时房间不应有截止时间');
+console.log('✓ 不限时房间没有截止时间');
+
+const handBefore = calmOpened.view.data.you.hand.length;
+const mountainMove = calmOpened.legalMoves.find((move) => move.type === 'playMountain');
+assert.ok(mountainMove, '应该有打到高山的合法动作');
+
+calmWs.send({
+  t: 'action',
+  tableId: calmTable,
+  type: mountainMove.type,
+  payload: mountainMove.payload,
+});
+const afterPlay = await waitFor(calmWs, (s) => s.seq > calmOpened.seq, '打高山生效');
+assert.equal(afterPlay.activePlayer, alice.user.id, '不限时房间不应自动换手');
+assert.ok(afterPlay.view.data.undoCount > 0, '应记录可撤销步数');
+console.log(`✓ 打高山后仍轮到自己（可撤销 ${afterPlay.view.data.undoCount} 步）`);
+
+calmWs.send({ t: 'action', tableId: calmTable, type: 'undo', payload: {} });
+const afterUndo = await waitFor(calmWs, (s) => s.seq > afterPlay.seq, '撤销生效');
+assert.equal(afterUndo.view.data.you.hand.length, handBefore, '撤销后手牌应恢复原状');
+assert.equal(afterUndo.view.data.undoCount, 0, '撤销栈应被清空');
+console.log('✓ 撤销成功，手牌恢复到出牌前');
+
+calmWs.send({ t: 'action', tableId: calmTable, type: 'endTurn', payload: {} });
+const afterEnd = await waitFor(calmWs, (s) => s.seq > afterUndo.seq, '结束回合生效');
+assert.equal(afterEnd.activePlayer, bob.user.id, '只有主动结束回合才换人');
+console.log('✓ 主动「结束回合」才换人');
+calmWs.close();
+
 /* ------------------------------ 收尾 ------------------------------ */
 
 clients2.alice.close();

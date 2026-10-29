@@ -633,6 +633,13 @@ export class TableService {
       table.deadlineAt = null;
       return;
     }
+
+    // turnMs === 0 表示不限时房间：不设截止时间，也就不会被超时托管
+    if (table.options.turnMs === 0) {
+      table.deadlineAt = null;
+      return;
+    }
+
     const raw = table.options.turnMs;
     const turnMs = typeof raw === 'number' && raw >= 5_000 && raw <= 600_000 ? raw : DEFAULT_TURN_MS;
     table.deadlineAt = now + turnMs;

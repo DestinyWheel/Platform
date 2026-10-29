@@ -62,7 +62,13 @@ export interface MandalaState extends BaseState {
   cups: Record<PlayerId, number[]>;
   mandalas: MandalaBoard[];
   settlement: { mandalaIdx: number; picker: PlayerId } | null;
+  /** 本回合内的撤销快照（JSON），换手或进入结算就清空 */
+  undo: string[];
+  /** 不限时房间：任何动作都不自动换手，只有主动「结束回合」才换 */
+  untimed: boolean;
 }
+
+const MAX_UNDO = 20;
 
 /* ------------------------------------------------------------------ */
 /* 工具                                                                */
@@ -140,6 +146,15 @@ function draw(state: MandalaState, count: number): number[] {
 function swapTurn(state: MandalaState): void {
   state.turn = state.turn === 0 ? 1 : 0;
   if (state.turn === 0) state.round += 1;
+  // 换手了就不能再撤销上一位玩家的操作
+  state.undo = [];
+}
+
+/** 记一份"动手之前"的快照，供本回合内撤销 */
+function pushUndo(state: MandalaState): void {
+  const { undo: _ignored, ...rest } = state;
+  state.undo.push(JSON.stringify(rest));
+  if (state.undo.length > MAX_UNDO) state.undo.shift();
 }
 
 function scoreOf(state: MandalaState, playerId: PlayerId): number {
@@ -231,6 +246,8 @@ function startSettlement(
 
   state.settlement = { mandalaIdx, picker: state.players[firstIdx]! };
   state.turn = firstIdx;
+  // 进入结算后，之前的操作不再可撤销
+  state.undo = [];
 
   ctx.emit({
     type: 'log',
@@ -280,6 +297,7 @@ const playMountain: ActionDef<MandalaState> = {
   reduce(state, action, ctx) {
     const { card, mandala } = action.payload as { card: number; mandala: number };
     const playerId = ctx.playerId;
+    pushUndo(state);
     const hand = state.hands[playerId]!;
     const color = hand[card]!;
 
@@ -303,7 +321,8 @@ const playMountain: ActionDef<MandalaState> = {
       return;
     }
 
-    swapTurn(state);
+    // 不限时房间：不自动换手，等玩家自己点「结束回合」
+    if (!state.untimed) swapTurn(state);
   },
 };
 
@@ -325,6 +344,7 @@ const playField: ActionDef<MandalaState> = {
   reduce(state, action, ctx) {
     const { card, mandala } = action.payload as { card: number; mandala: number };
     const playerId = ctx.playerId;
+    pushUndo(state);
     const hand = state.hands[playerId]!;
     const color = hand[card]!;
     const fieldIdx = state.players.indexOf(playerId);
@@ -363,6 +383,7 @@ const discard: ActionDef<MandalaState> = {
   reduce(state, action, ctx) {
     const { cards } = action.payload as { cards: number[] };
     const playerId = ctx.playerId;
+    pushUndo(state);
     const hand = state.hands[playerId]!;
 
     const sorted = [...cards].sort((a, b) => b - a);
@@ -377,7 +398,7 @@ const discard: ActionDef<MandalaState> = {
       args: { player: playerId, count: sorted.length, drawn: drawn.length },
     });
 
-    swapTurn(state);
+    if (!state.untimed) swapTurn(state);
   },
 };
 
@@ -391,6 +412,28 @@ const endTurn: ActionDef<MandalaState> = {
   reduce(state, _action, ctx) {
     ctx.emit({ type: 'log', key: 'mandala.endTurn', args: { player: ctx.playerId } });
     swapTurn(state);
+  },
+};
+
+/**
+ * 撤销上一步。
+ *
+ * 只在**自己的回合内**有效：快照在换手和进入结算时都会清空，
+ * 所以不可能撤到别人的回合去。
+ */
+const undoLast: ActionDef<MandalaState> = {
+  allowedIn: ['playing'],
+  schema: z.object({}),
+  validate(state, _action, ctx) {
+    if (state.players[state.turn] !== ctx.playerId) return { ok: false, reason: 'not.your.turn' };
+    if (state.undo.length === 0) return { ok: false, reason: 'nothing.to.undo' };
+    return { ok: true };
+  },
+  reduce(state, _action, ctx) {
+    const snapshot = state.undo.pop();
+    if (!snapshot) return;
+    Object.assign(state, JSON.parse(snapshot) as Record<string, unknown>);
+    ctx.emit({ type: 'log', key: 'mandala.undo', args: { player: ctx.playerId } });
   },
 };
 
@@ -594,7 +637,7 @@ const mandala: GamePlugin<MandalaState> = {
   manifest,
   bots: [greedyBot],
 
-  createState({ players, seed }) {
+  createState({ players, options, seed }) {
     const rng = mulberry32(seed);
     const deck: number[] = [];
     for (const color of COLORS) {
@@ -621,6 +664,8 @@ const mandala: GamePlugin<MandalaState> = {
       cups: Object.fromEntries(players.map((player) => [player, []])),
       mandalas: [emptyBoard(), emptyBoard()],
       settlement: null,
+      undo: [],
+      untimed: options.untimed === true,
     };
 
     const [first, second] = players as [PlayerId, PlayerId];
@@ -643,7 +688,7 @@ const mandala: GamePlugin<MandalaState> = {
   },
 
   states,
-  actions: { playMountain, playField, discard, endTurn, pickColor },
+  actions: { playMountain, playField, discard, endTurn, undo: undoLast, pickColor },
   legalMoves: enumerateMoves,
   view: mandalaView,
 };
@@ -687,6 +732,9 @@ function mandalaView(state: MandalaState, viewer: PlayerId | 'spectator'): Publi
       settlement: state.settlement
         ? { mandalaIdx: state.settlement.mandalaIdx, picker: state.settlement.picker }
         : null,
+      /** 本回合内还能撤销几步 */
+      undoCount: state.undo.length,
+      untimed: state.untimed,
       revealed,
     },
   };

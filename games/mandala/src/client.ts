@@ -57,6 +57,10 @@ interface MandalaData {
   you: (PlayerInfo & { hand: number[] }) | null;
   opponent: PlayerInfo | null;
   settlement: { mandalaIdx: number; picker: PlayerId } | null;
+  /** 本回合内还能撤销几步 */
+  undoCount: number;
+  /** 不限时房间：不自动换手 */
+  untimed: boolean;
   revealed: boolean;
 }
 
@@ -288,6 +292,9 @@ function render(): void {
   const actionsHtml = view.finished
     ? ''
     : `<div class="md-actions">
+        <button class="md-btn" data-action="undo" ${canAct && data.undoCount > 0 ? '' : 'disabled'}>
+          ↩ 撤销${data.undoCount > 0 ? `（${data.undoCount}）` : ''}
+        </button>
         <button class="md-btn ${ui.discardMode ? 'primary' : ''}" data-action="discard" ${canAct ? '' : 'disabled'}>
           ${ui.discardMode ? '退出弃牌' : '弃牌'}
         </button>
@@ -313,6 +320,7 @@ function render(): void {
         <span class="md-turn ${activeId === me?.id ? 'on' : ''}">${turnHint}</span>
         <span>牌堆 <b>${data.deckRemaining}</b>${data.deckExhausted ? '（已抽空）' : ''}</span>
         <span>第 <b>${view.round}</b> 轮</span>
+        ${data.untimed ? '<span>不限时 · 需手动结束回合</span>' : ''}
       </div>
       ${opponentHtml}
       ${opponentHtml ? `<div class="md-rivers">${riverHtml(data.opponent!, '对方长河')}</div>` : ''}
@@ -399,6 +407,11 @@ function onClick(event: MouseEvent): void {
   const action = button.dataset.action;
   if (action === 'end-turn') {
     context?.send({ type: 'endTurn', payload: {} });
+  } else if (action === 'undo') {
+    context?.send({ type: 'undo', payload: {} });
+    ui.selected = null;
+    ui.discardMode = false;
+    ui.discardSel.clear();
   } else if (action === 'discard') {
     ui.discardMode = !ui.discardMode;
     ui.discardSel.clear();
@@ -459,6 +472,8 @@ function formatLog(entry: LogEntry): string | null {
       return `${who} 弃了 ${args.count} 张，补回 ${args.drawn} 张`;
     case 'mandala.endTurn':
       return `${who} 结束回合`;
+    case 'mandala.undo':
+      return `${who} 撤销了一步`;
     case 'mandala.settleStart':
       return `⚡ 曼荼罗 ${args.mandala} 集齐六色，${who} 先选${args.tie ? '（原野牌数相同）' : ''}`;
     case 'mandala.pick':

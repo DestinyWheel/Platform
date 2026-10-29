@@ -35,6 +35,7 @@ export function Lobby({
   const [boardGame, setBoardGame] = useState('');
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
   const [withBot, setWithBot] = useState(false);
+  const [untimed, setUntimed] = useState(false);
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -82,7 +83,14 @@ export function Lobby({
       const { id } = await api.createTable({
         gameId: game.id,
         maxPlayers: game.players.max,
-        ...(withBot ? { options: { bots: 1 } } : {}),
+        ...(withBot || untimed
+          ? {
+              options: {
+                ...(withBot ? { bots: 1 } : {}),
+                ...(untimed ? { untimed: true, turnMs: 0 } : {}),
+              },
+            }
+          : {}),
       });
       onOpen(id);
     } catch (err) {
@@ -127,6 +135,14 @@ export function Lobby({
             onChange={(event) => setWithBot(event.target.checked)}
           />
           开局缺人时补一个机器人（单人也能玩）
+        </label>
+        <label className="bot-toggle">
+          <input
+            type="checkbox"
+            checked={untimed}
+            onChange={(event) => setUntimed(event.target.checked)}
+          />
+          不限时（不自动换手，只有主动「结束回合」才换人）
         </label>
         <div className="game-grid">
           {games.map((game) => (
