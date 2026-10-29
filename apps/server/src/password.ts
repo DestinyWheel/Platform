@@ -113,3 +113,14 @@ const WEAK = [
   '66666666',
   '88888888',
 ];
+
+/**
+ * 管理员重置密码时生成的临时口令。
+ *
+ * 12 位、去掉视觉上容易混淆的字符（0/O、1/l/I），保证念一遍就能抄对。
+ * 这个口令只在重置的响应里出现一次，服务端不留明文，也不写日志。
+ */
+export function generatePassword(): string {
+  const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from(randomBytes(12), (byte) => alphabet[byte % alphabet.length]).join('');
+}

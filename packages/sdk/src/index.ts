@@ -292,6 +292,49 @@ export interface TableSummary {
   createdAt: number;
 }
 
+/* ---------------- 管理端（只有管理员能拿到） ---------------- */
+
+export interface AdminUserRow {
+  id: PlayerId;
+  name: string;
+  isAdmin: boolean;
+  createdAt: number;
+  lastLoginAt: number | null;
+  /** false = 还没设过密码的老账号 */
+  hasPassword: boolean;
+  tokenVersion: number;
+  games: number;
+  wins: number;
+}
+
+export interface AdminPluginVersion {
+  gameId: string;
+  name: string;
+  version: string;
+  status: 'pending' | 'active' | 'retired' | 'failed';
+  hash: string;
+  error: string | null;
+  createdAt: number;
+  activatedAt: number | null;
+  /** 这个版本的 worker 现在是否在内存里 */
+  loaded: boolean;
+}
+
+export interface AdminOverview {
+  uptime: number;
+  db: string;
+  memory: { rss: number; heapUsed: number };
+  /** 内存里活着的插件版本 */
+  workers: string[];
+  /** 还有进行中牌桌在用的版本（回收不会动它们） */
+  inUse: string[];
+  tables: Record<string, number>;
+  users: { total: number; admins: number };
+  versions: { total: number; active: number; failed: number };
+  games: { id: string; name: string; version: string }[];
+  limits: { ipBuckets: number };
+}
+
 export type ClientMessage =
   | { t: 'subscribe'; tableId: string }
   | { t: 'unsubscribe'; tableId: string }

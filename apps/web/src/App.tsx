@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, loadSession, saveSession, setAuthToken, setUnauthorizedHandler, type Session } from './api';
 import { Lobby } from './views/Lobby';
+import { Admin } from './views/Admin';
 import { Login } from './views/Login';
 import { ReplayView } from './views/ReplayView';
 import { TableView } from './views/TableView';
 
-type View = { name: 'lobby' } | { name: 'table'; id: string } | { name: 'replay'; id: string };
+type View =
+  | { name: 'lobby' }
+  | { name: 'table'; id: string }
+  | { name: 'replay'; id: string }
+  | { name: 'admin' };
 
 function readHash(): View {
   const table = /^#\/table\/([\w-]+)$/.exec(location.hash);
@@ -13,6 +18,8 @@ function readHash(): View {
 
   const replay = /^#\/replay\/([\w-]+)$/.exec(location.hash);
   if (replay?.[1]) return { name: 'replay', id: replay[1] };
+
+  if (location.hash === '#/admin') return { name: 'admin' };
 
   return { name: 'lobby' };
 }
@@ -23,7 +30,9 @@ function writeHash(view: View): void {
       ? `#/table/${view.id}`
       : view.name === 'replay'
         ? `#/replay/${view.id}`
-        : '#/';
+        : view.name === 'admin'
+          ? '#/admin'
+          : '#/';
   if (location.hash !== next) history.replaceState(null, '', next);
 }
 
@@ -62,6 +71,14 @@ export function App() {
     setView(next);
   };
 
+  // 手敲 #/admin 也进不去：后端本来就拦，前端也别把页面画出来
+  useEffect(() => {
+    if (view.name === 'admin' && session && !session.user.isAdmin) {
+      navigate({ name: 'lobby' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, session]);
+
   if (!session) {
     return (
       <Login
@@ -87,6 +104,11 @@ export function App() {
     );
   }
 
+  if (view.name === 'admin') {
+    if (!session.user.isAdmin) return null;
+    return <Admin session={session} onExit={() => navigate({ name: 'lobby' })} />;
+  }
+
   if (view.name === 'replay') {
     return <ReplayView tableId={view.id} onExit={() => navigate({ name: 'lobby' })} />;
   }
@@ -96,6 +118,7 @@ export function App() {
       session={session}
       onOpen={(id) => navigate({ name: 'table', id })}
       onReplay={(id) => navigate({ name: 'replay', id })}
+      onAdmin={() => navigate({ name: 'admin' })}
       onSession={(next) => {
         saveSession(next);
         setSession(next);

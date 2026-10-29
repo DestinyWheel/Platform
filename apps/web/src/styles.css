@@ -773,3 +773,128 @@ select.ghost {
   justify-content: flex-end;
   gap: 10px;
 }
+
+/* ---------------- 管理后台 ---------------- */
+
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 20px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: fit-content;
+}
+
+.admin-tabs button {
+  padding: 8px 18px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.admin-tabs button.active {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.hidden-file {
+  display: none;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.admin-table td {
+  vertical-align: top;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.badge.active {
+  border-color: rgba(46, 160, 67, 0.5);
+  color: #56d364;
+  background: rgba(46, 160, 67, 0.12);
+}
+
+.badge.pending {
+  border-color: rgba(210, 153, 34, 0.5);
+  color: #e3b341;
+  background: rgba(210, 153, 34, 0.12);
+}
+
+.badge.failed {
+  border-color: rgba(248, 81, 73, 0.5);
+  color: #ff7b72;
+  background: rgba(248, 81, 73, 0.12);
+}
+
+/* 一次性口令：故意做得显眼，因为它只出现一次 */
+.secret {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(210, 153, 34, 0.55);
+  background: rgba(210, 153, 34, 0.1);
+  color: #f0d08a;
+}
+
+.secret code {
+  margin-left: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  user-select: all;
+}
+
+.secret-actions {
+  display: flex;
+  gap: 8px;
+}

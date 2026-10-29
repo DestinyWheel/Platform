@@ -21,12 +21,14 @@ export function Lobby({
   onReplay,
   onLogout,
   onSession,
+  onAdmin,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
   onReplay: (tableId: string) => void;
   onLogout: () => void;
   onSession: (session: Session) => void;
+  onAdmin: () => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [tables, setTables] = useState<TableSummary[]>([]);
@@ -123,6 +125,11 @@ export function Lobby({
         <div className="title">桌游平台</div>
         <div className="spacer" />
         <span className="muted">{session.user.name}{session.user.isAdmin ? ' · 管理员' : ''}</span>
+        {session.user.isAdmin ? (
+          <button className="ghost" onClick={onAdmin}>
+            管理
+          </button>
+        ) : null}
         <button className="ghost" onClick={() => setChangingPassword(true)}>
           改密码
         </button>

@@ -1,4 +1,7 @@
 import type {
+  AdminOverview,
+  AdminPluginVersion,
+  AdminUserRow,
   AuthUser,
   GameManifest,
   LeaderboardEntry,
@@ -73,6 +76,24 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+/** 二进制上传（插件 zip）；和 request 分开是因为不能塞 content-type: application/json */
+async function sendBinary<T>(path: string, body: ArrayBuffer): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/zip' };
+  if (authToken) headers.authorization = `Bearer ${authToken}`;
+
+  const response = await fetch(`/api${path}`, { method: 'POST', headers, body });
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as unknown) : {};
+
+  if (!response.ok) {
+    if (response.status === 401) onUnauthorized?.();
+    const code = (payload as { code?: string }).code ?? 'http_error';
+    const message = (payload as { message?: string }).message ?? `上传失败 (${response.status})`;
+    throw new ApiError(code, message, response.status);
+  }
+  return payload as T;
+}
+
 export const api = {
   authConfig: () =>
     request<{ registration: 'open' | 'code'; allowClaim: boolean }>('/auth/config'),
@@ -125,4 +146,47 @@ export const api = {
     request<{ gameId: string; entries: LeaderboardEntry[] }>(
       `/leaderboard?gameId=${encodeURIComponent(gameId)}`,
     ),
+
+  /* ------------------------------ 管理端 ------------------------------ */
+
+  adminOverview: () => request<AdminOverview>('/admin/overview'),
+
+  adminPlugins: () =>
+    request<{ versions: AdminPluginVersion[]; loaded: string[]; inUse: string[] }>('/admin/plugins'),
+
+  /** 插件包直接当请求体发，省掉 multipart */
+  adminUpload: (file: ArrayBuffer) =>
+    sendBinary<{ gameId: string; version: string; status: string }>('/admin/plugins', file),
+
+  adminActivate: (gameId: string, version: string) =>
+    request<{ ok: true; activatedAt: number }>(
+      `/admin/plugins/${encodeURIComponent(gameId)}/${encodeURIComponent(version)}/activate`,
+      { method: 'POST' },
+    ),
+
+  adminGc: () =>
+    request<{ released: string[]; loaded: string[] }>('/admin/plugins/gc', { method: 'POST' }),
+
+  adminRepublish: () =>
+    request<{ games: string[] }>('/admin/plugins/republish', { method: 'POST' }),
+
+  adminUsers: () => request<{ users: AdminUserRow[] }>('/admin/users'),
+
+  adminSetAdmin: (id: string, isAdmin: boolean) =>
+    request<{ ok: true }>(`/admin/users/${encodeURIComponent(id)}/admin`, {
+      method: 'POST',
+      body: JSON.stringify({ isAdmin }),
+    }),
+
+  /** 不传 password 就让服务端生成一个临时口令，返回值只出现这一次 */
+  adminResetPassword: (id: string, password?: string) =>
+    request<{ ok: true; password: string }>(`/admin/users/${encodeURIComponent(id)}/password`, {
+      method: 'POST',
+      body: JSON.stringify(password ? { password } : {}),
+    }),
+
+  adminBackup: () =>
+    request<{ file: string; bytes: number; counts: Record<string, number> }>('/admin/backup', {
+      method: 'POST',
+    }),
 };

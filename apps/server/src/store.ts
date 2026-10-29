@@ -132,6 +132,26 @@ export interface Store {
   exportAll(): Promise<Record<string, Record<string, unknown>[]>>;
   importAll(dump: Record<string, Record<string, unknown>[]>): Promise<Record<string, number>>;
   tableStatusCounts(): Promise<Record<string, number>>;
+
+  /* ------------------------- 管理端 ------------------------- */
+  listUsers(limit: number): Promise<AdminUserRecord[]>;
+  setUserAdmin(id: string, isAdmin: boolean): Promise<void>;
+  countAdmins(): Promise<number>;
+}
+
+/** 管理端看到的用户行：纯读模型，不含任何密码材料 */
+export interface AdminUserRecord {
+  id: string;
+  name: string;
+  isAdmin: boolean;
+  createdAt: number;
+  lastLoginAt: number | null;
+  hasPassword: boolean;
+  /** 令牌版本，>0 说明改过密码或退出过 */
+  tokenVersion: number;
+  /** 打完的局数 */
+  games: number;
+  wins: number;
 }
 
 export interface ActionRow {
@@ -705,6 +725,56 @@ export class PgStore implements Store {
     const counts: Record<string, number> = {};
     for (const row of rows) counts[row.status] = Number(row.n);
     return counts;
+  }
+
+  /* ------------------------- 管理端 ------------------------- */
+
+  async listUsers(limit: number): Promise<AdminUserRecord[]> {
+    const rows = await this.db.query<{
+      id: string;
+      name: string;
+      is_admin: boolean;
+      created_at: number;
+      last_login_at: number | null;
+      password_set_at: number | null;
+      token_version: number;
+      games: number;
+      wins: number;
+    }>(
+      `SELECT u.id, u.name, u.is_admin, u.created_at, u.last_login_at, u.password_set_at,
+              u.token_version,
+              count(m.table_id)::int AS games,
+              COALESCE(sum(CASE WHEN m.is_win THEN 1 ELSE 0 END), 0)::int AS wins
+         FROM users u
+         LEFT JOIN match_results m ON m.user_id = u.id
+        GROUP BY u.id
+        ORDER BY u.created_at ASC
+        LIMIT $1`,
+      [limit],
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      isAdmin: Boolean(row.is_admin),
+      createdAt: Number(row.created_at),
+      lastLoginAt: row.last_login_at === null ? null : Number(row.last_login_at),
+      hasPassword: row.password_set_at !== null,
+      tokenVersion: Number(row.token_version ?? 0),
+      games: Number(row.games),
+      wins: Number(row.wins),
+    }));
+  }
+
+  async setUserAdmin(id: string, isAdmin: boolean): Promise<void> {
+    await this.db.execute('UPDATE users SET is_admin = $2 WHERE id = $1', [id, isAdmin]);
+  }
+
+  async countAdmins(): Promise<number> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM users WHERE is_admin',
+    );
+    return Number(rows[0]?.n ?? 0);
   }
 }
 

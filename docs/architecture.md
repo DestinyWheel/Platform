@@ -517,8 +517,12 @@ apps/web/src/
   lobby/          游戏列表（读服务端插件目录）、开桌、加入
   table/          牌桌壳：座位、计时器、聊天、日志、观战、设置
   host/           插件运行时：加载 client.js、import map、错误边界、版本切换
+  admin/          管理后台：概览、插件（上传/激活/回收）、用户
   components/     宿主 UI 库（Avatar、Timer、Chat、Confirm…）
 ```
+
+管理后台不是独立应用，就是同一个 SPA 里的一个路由（`#/admin`）：只有 `isAdmin` 的人能看到入口，
+前端隐藏只是礼貌，**真正的边界是每个 `/api/admin/*` 路由里的 `requireAdmin`**。详见 [admin.md](./admin.md)。
 
 插件运行时要点：
 

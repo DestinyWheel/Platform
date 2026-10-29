@@ -8,7 +8,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
 import { AuthError, bearerFrom, signToken, verifyToken } from './auth.js';
-import { checkPasswordInput, hashPassword, verifyPassword } from './password.js';
+import { checkPasswordInput, generatePassword, hashPassword, verifyPassword } from './password.js';
 import { EventBus } from './bus.js';
 import { createDb, migrate, type Db } from './db/index.js';
 import { Limiters, RateLimiter, RateLimitExceeded, checkLimit } from './limits.js';
@@ -409,12 +409,100 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     return { gameId, entries: await service.leaderboard(gameId) };
   });
 
+  /* --------------------------- 管理后台 --------------------------- */
+
+  /** 概览：一个请求拿全，管理页不用并发打五个接口 */
+  app.get('/api/admin/overview', async (request) => {
+    await requireAdmin(request);
+    const [tables, users, admins, versions, inUse] = await Promise.all([
+      store.tableStatusCounts(),
+      store.countUsers(),
+      store.countAdmins(),
+      store.listGameVersions(),
+      store.listInUseVersions(),
+    ]);
+    const memory = process.memoryUsage();
+
+    return {
+      uptime: Math.round(process.uptime()),
+      db: db.kind,
+      memory: { rss: memory.rss, heapUsed: memory.heapUsed },
+      workers: host.loadedVersions(),
+      /** 有进行中牌桌在用的版本，GC 不会动它们 */
+      inUse: [...inUse],
+      tables,
+      users: { total: users, admins },
+      versions: {
+        total: versions.length,
+        active: versions.filter((version) => version.status === 'active').length,
+        failed: versions.filter((version) => version.status === 'failed').length,
+      },
+      games: host.listActive().map((manifest) => ({
+        id: manifest.id,
+        name: manifest.name,
+        version: manifest.version,
+      })),
+      limits: { ipBuckets: ipLimiter.size },
+    };
+  });
+
+  app.get('/api/admin/users', async (request) => {
+    await requireAdmin(request);
+    return { users: await store.listUsers(500) };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/admin/users/:id/admin', async (request) => {
+    const admin = await requireAdmin(request);
+    const { isAdmin } = z.object({ isAdmin: z.boolean() }).parse(request.body);
+
+    const target = await store.getUser(request.params.id);
+    if (!target) throw new ServiceError('not_found', '用户不存在');
+
+    // 两个人同时点"取消管理员"时可能各自都以为还有别人才是管理员，所以两道检查都留着
+    if (!isAdmin && target.id === admin.id) {
+      throw new AuthError('cannot_demote_self', '不能取消自己的管理员权限', 400);
+    }
+    if (!isAdmin && target.isAdmin && (await store.countAdmins()) <= 1) {
+      throw new AuthError('last_admin', '至少要留一个管理员', 400);
+    }
+
+    await store.setUserAdmin(target.id, isAdmin);
+    request.log.info({ admin: admin.name, userId: target.id, isAdmin }, '管理员权限变更');
+    return { ok: true };
+  });
+
+  /**
+   * 重置密码：不给密码就生成一个临时口令，**只在这一次响应里返回**。
+   * 服务端不存明文、不写日志——管理员抄下来告诉对方，让对方自己再改。
+   */
+  app.post<{ Params: { id: string } }>('/api/admin/users/:id/password', async (request) => {
+    const admin = await requireAdmin(request);
+    const target = await store.getUser(request.params.id);
+    if (!target) throw new ServiceError('not_found', '用户不存在');
+
+    const input = z
+      .object({ password: z.string().max(200).optional() })
+      .parse(request.body ?? {});
+    const password = input.password?.trim() ? input.password.trim() : generatePassword();
+
+    const problem = checkPasswordInput(password, target.name);
+    if (problem) throw new AuthError('weak_password', problem, 400);
+
+    await store.setPassword(target.id, await hashPassword(password));
+    request.log.info({ admin: admin.name, userId: target.id }, '管理员重置密码');
+    metrics.inc('auth.password_reset');
+
+    return { ok: true, password };
+  });
+
   /* --------------------------- 插件管理 --------------------------- */
 
   app.get('/api/admin/plugins', async (request) => {
     await requireAdmin(request);
-    const versions = await store.listGameVersions();
+    const [versions, inUse] = await Promise.all([store.listGameVersions(), store.listInUseVersions()]);
     return {
+      loaded: host.loadedVersions(),
+      inUse: [...inUse],
       versions: versions.map((version) => ({
         gameId: version.gameId,
         version: version.version,
@@ -424,6 +512,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         createdAt: version.createdAt,
         activatedAt: version.activatedAt,
         name: version.manifest?.name ?? version.gameId,
+        loaded: host.loadedVersions().includes(`${version.gameId}@${version.version}`),
       })),
     };
   });
@@ -496,7 +585,13 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
     if (error instanceof ServiceError) {
       const status =
-        error.code === 'unauthorized' ? 401 : error.code === 'forbidden' ? 403 : 400;
+        error.code === 'unauthorized'
+          ? 401
+          : error.code === 'forbidden'
+            ? 403
+            : error.code === 'not_found'
+              ? 404
+              : 400;
       return reply.code(status).send({ code: error.code, message: error.message });
     }
     if (error instanceof PluginError) {

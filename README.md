@@ -24,7 +24,7 @@ pnpm dev          # 同时起 server(8787) + web(5173)
 ```bash
 pnpm typecheck    # 全仓库类型检查
 pnpm build        # 构建前端到 apps/web/dist
-pnpm smoke        # 端到端：十一段，从注册登录到对局/限流/备份全跑一遍
+pnpm smoke        # 端到端：十二段，从注册登录到对局/人机/管理后台/限流/备份全跑一遍
 pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 ```
 
@@ -41,7 +41,7 @@ apps/
     src/pluginHost/  编译 / 静态检查 / 冒烟 / 版本注册表 / worker 运行时
     src/elo.ts     多人局 Elo 评分
     src/presence.ts 在线人数（单实例内存实现）
-  web/             React 宿主：登录 / 大厅 / 牌桌 / 回放 / 插件容器
+  web/             React 宿主：登录 / 大厅 / 牌桌 / 回放 / 管理后台 / 插件容器
     src/host/      运行时加载 /plugins/<id>/<version>/client.js
 packages/
   sdk/             插件契约（服务端 + 客户端）+ 线上协议
@@ -74,15 +74,27 @@ scripts/
 | Elo | 每人每个游戏一个分数，默认 1500，零和；开桌时 `ranked: false` 可打休闲局不计分 |
 | 人机 | 大厅勾选「补一个机器人」即可单人开局；机器人走和真人完全相同的动作通道，只是不产生战绩与 Elo |
 
+## 管理后台
+
+大厅右上角「管理」——只有 `isAdmin` 的人看得到（第一个注册的账号自动是管理员）。
+
+| 页签 | 能做什么 |
+|---|---|
+| 概览 | 运行时长 / 内存 / worker 数 / 各状态牌桌数 / 用户数；一键整库备份 |
+| 插件 | 上传 zip、激活某个版本、回收闲置 worker、重新扫描 `games/` |
+| 用户 | 看注册时间、最后登录、局数；设为/取消管理员；重置密码（生成 12 位临时口令，只显示一次） |
+
+细节见 [docs/admin.md](docs/admin.md)。
+
 ## 运维
 
 | 做什么 | 怎么做 |
 |---|---|
 | 健康检查 | `GET /api/health` —— db 类型、uptime、内存、worker 数、各状态牌桌数 |
 | 指标 | `GET /api/metrics`（管理员）—— Prometheus 文本格式 |
-| 备份 | `POST /api/admin/backup`（管理员）—— 整库导出到 `storage/backups/*.json.gz` |
+| 备份 | 管理后台「立即备份」，或 `POST /api/admin/backup` —— 整库导出到 `storage/backups/*.json.gz` |
 | 恢复 | `pnpm tsx scripts/restore.mjs <备份文件> [--data-dir <目录>]`（**破坏性**） |
-| 回收插件 | `POST /api/admin/plugins/gc` —— 卸载无人在用的旧版本 worker |
+| 回收插件 | 管理后台「回收闲置 worker」，或 `POST /api/admin/plugins/gc` |
 
 限流默认全开：登录按 IP、建桌/上传按用户、聊天和动作按 WS 连接。超限返回 `429` + `retry-after`。
 

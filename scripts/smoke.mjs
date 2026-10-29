@@ -843,6 +843,134 @@ await expectFailure(
 );
 console.log('✓ 老账号可认领一次，认领后原 id 不变、不能重复认领');
 
+/* ------------------------------ 管理后台 ------------------------------ */
+
+console.log('\n▶ 阶段十二：管理后台');
+
+await expectFailure(api2('/admin/overview', { token: bob.token }), 403, 'forbidden', '非管理员看概览');
+await expectFailure(api2('/admin/users', { token: bob.token }), 403, 'forbidden', '非管理员看用户列表');
+await expectFailure(
+  api2('/admin/plugins', { token: bob.token, method: 'POST', raw: buildPackage('9.9.9') }),
+  403,
+  'forbidden',
+  '非管理员传插件',
+);
+console.log('✓ 非管理员的 /api/admin/* 一律 403');
+
+const overview = await api2('/admin/overview', { token: alice.token });
+assert.ok(overview.users.total >= 4, `用户数应不少于 4，实际 ${overview.users.total}`);
+assert.ok(Array.isArray(overview.workers), '概览应带 worker 列表');
+assert.ok(
+  overview.games.some((game) => game.id === 'dice'),
+  '概览应列出在线游戏',
+);
+assert.equal(overview.users.admins, 1, '当前应该只有爱丽丝一个管理员');
+console.log(
+  `✓ 概览：${overview.users.total} 个用户 / ${overview.workers.length} 个 worker / 数据库 ${overview.db}`,
+);
+
+const userList = await api2('/admin/users', { token: alice.token });
+const aliceRow = userList.users.find((user) => user.id === alice.user.id);
+const bobRow = userList.users.find((user) => user.id === bob.user.id);
+assert.equal(aliceRow.isAdmin, true);
+assert.equal(bobRow.isAdmin, false);
+assert.equal(bobRow.hasPassword, true, '注册出来的账号应该有密码');
+console.log('✓ 用户列表带权限、密码状态和局数');
+
+await expectFailure(
+  api2(`/admin/users/${alice.user.id}/admin`, {
+    token: alice.token,
+    method: 'POST',
+    body: { isAdmin: false },
+  }),
+  400,
+  'cannot_demote_self',
+  '取消自己的管理员',
+);
+await expectFailure(
+  api2('/admin/users/不存在的id/admin', {
+    token: alice.token,
+    method: 'POST',
+    body: { isAdmin: true },
+  }),
+  404,
+  'not_found',
+  '改不存在的用户',
+);
+console.log('✓ 不能取消自己的管理员，也不接受不存在的用户');
+
+await api2(`/admin/users/${bob.user.id}/admin`, {
+  token: alice.token,
+  method: 'POST',
+  body: { isAdmin: true },
+});
+let bobAfter = (await api2('/admin/users', { token: alice.token })).users.find(
+  (user) => user.id === bob.user.id,
+);
+assert.equal(bobAfter.isAdmin, true, '应已授予管理员');
+await api2(`/admin/users/${bob.user.id}/admin`, {
+  token: alice.token,
+  method: 'POST',
+  body: { isAdmin: false },
+});
+bobAfter = (await api2('/admin/users', { token: alice.token })).users.find(
+  (user) => user.id === bob.user.id,
+);
+assert.equal(bobAfter.isAdmin, false, '应已收回管理员');
+console.log('✓ 授予 / 收回管理员权限立即生效');
+
+const charlieLogin = await api2('/auth/login', {
+  method: 'POST',
+  body: { name: '查理', password: 'charlie-smoke-2025' },
+});
+const reset = await api2(`/admin/users/${charlieLogin.user.id}/password`, {
+  token: alice.token,
+  method: 'POST',
+  body: {},
+});
+assert.equal(reset.password.length, 12, '应生成 12 位临时口令');
+await expectFailure(
+  api2('/me', { token: charlieLogin.token }),
+  401,
+  'unauthorized',
+  '重置密码后的旧令牌',
+);
+const reloginWithTemp = await api2('/auth/login', {
+  method: 'POST',
+  body: { name: '查理', password: reset.password },
+});
+assert.equal(reloginWithTemp.user.id, charlieLogin.user.id, '临时口令应能登回同一个账号');
+console.log('✓ 重置密码：旧令牌立刻失效，12 位临时口令可登录');
+
+const uploaded = await api2('/admin/plugins', {
+  token: alice.token,
+  method: 'POST',
+  raw: buildPackage('0.2.2'),
+});
+assert.equal(uploaded.gameId, 'dice');
+assert.equal(uploaded.version, '0.2.2');
+
+const pluginList = await api2('/admin/plugins', { token: alice.token });
+const v22 = pluginList.versions.find((item) => item.gameId === 'dice' && item.version === '0.2.2');
+const v20 = pluginList.versions.find((item) => item.gameId === 'dice' && item.version === '0.2.0');
+assert.equal(v22.status, 'active', '新版本应自动激活');
+assert.equal(v22.loaded, true, '新版本应在内存里');
+assert.equal(v20.status, 'retired', '旧版本应退役');
+console.log('✓ 后台上传插件：0.2.2 生效、0.2.0 自动退役（服务没有重启）');
+
+const gcResult = await api2('/admin/plugins/gc', { token: alice.token, method: 'POST' });
+assert.ok(Array.isArray(gcResult.released), '回收应返回清单');
+assert.ok(
+  !gcResult.released.includes('dice@0.2.2'),
+  '正在生效的版本不能被回收',
+);
+console.log(`✓ 回收：卸载 ${gcResult.released.join('、') || '（无）'}，内存里剩 ${gcResult.loaded.join('、')}`);
+
+const adminBackup = await api2('/admin/backup', { token: alice.token, method: 'POST' });
+assert.ok(adminBackup.bytes > 0, '备份文件不应为空');
+assert.ok(adminBackup.counts.users >= 4, '备份应包含用户表');
+console.log(`✓ 一键备份：${Object.keys(adminBackup.counts).length} 张表，${(adminBackup.bytes / 1024).toFixed(1)} KB`);
+
 /* ------------------------------ 收尾 ------------------------------ */
 
 clients2.alice.close();
