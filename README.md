@@ -32,7 +32,7 @@ pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 
 一句话：**每局游戏 = 可序列化状态 + 纯函数 reducer + 事件日志**，进程里不留长驻游戏对象，所以换游戏代码不需要重启。
 
-详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)、[docs/m3.md](docs/m3.md)。
+详细设计见 [docs/architecture.md](docs/architecture.md)，实现边界见 [docs/m0.md](docs/m0.md)、[docs/m1.md](docs/m1.md)、[docs/m2.md](docs/m2.md)、[docs/m3.md](docs/m3.md)、[docs/m5.md](docs/m5.md)（M4 人机尚未开始）。
 
 ```
 apps/
@@ -85,7 +85,7 @@ scripts/
 
 限流默认全开：登录按 IP、建桌/上传按用户、聊天和动作按 WS 连接。超限返回 `429` + `retry-after`。
 
-细节见 [docs/m4.md](docs/m4.md)。
+细节见 [docs/m5.md](docs/m5.md)。
 
 ## 加一个游戏
 
