@@ -1,23 +1,27 @@
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type { GameManifest, GamePlugin } from '@platform/sdk';
+import type { GameManifest } from '@platform/sdk';
 import type { Store } from '../store.js';
-import { PluginError, type GameVersionRecord, type LoadedPlugin } from './types.js';
+import { WorkerPluginRuntime, type PluginRuntime } from './runtime.js';
+import { PluginError, type GameVersionRecord } from './types.js';
 
 /**
  * 插件运行时注册表。
  *
- * 关键点：缓存按 `游戏@版本` 存，一张桌锁哪个版本就永远拿哪个实例。
- * 发布新版本只是新增一个 key，正在跑的老桌完全不受影响。
+ * 每个 (游戏, 版本) 对应一个 worker。缓存按版本存，
+ * 一张桌锁哪个版本就永远拿哪个实例；版本退役且没有桌在用 → terminate，内存真正释放。
  */
 export class PluginHost {
-  private readonly loaded = new Map<string, LoadedPlugin>();
+  private readonly loaded = new Map<string, PluginRuntime>();
   private readonly active = new Map<string, GameVersionRecord>();
 
   constructor(
     private readonly store: Store,
     readonly storageRoot: string,
   ) {}
+
+  private key(gameId: string, version: string): string {
+    return `${gameId}@${version}`;
+  }
 
   /** 启动时按库恢复：只把每个游戏的 active 版本先加载进来，其它版本按需加载 */
   async refresh(): Promise<void> {
@@ -30,50 +34,36 @@ export class PluginHost {
     }
   }
 
-  async load(record: GameVersionRecord): Promise<LoadedPlugin> {
-    const key = `${record.gameId}@${record.version}`;
+  async load(record: GameVersionRecord): Promise<PluginRuntime> {
+    const key = this.key(record.gameId, record.version);
     const cached = this.loaded.get(key);
     if (cached) return cached;
 
-    const entry = path.join(record.dir, 'server.js');
-    let module: Record<string, unknown>;
+    const runtime = new WorkerPluginRuntime(
+      record.gameId,
+      record.version,
+      record.manifest,
+      path.join(record.dir, 'server.js'),
+      record.hash,
+    );
+
     try {
-      module = (await import(`${pathToFileURL(entry).href}?v=${record.hash}`)) as Record<
-        string,
-        unknown
-      >;
+      await runtime.ready();
     } catch (error) {
+      await runtime.terminate().catch(() => undefined);
       throw new PluginError('load_failed', `加载 ${key} 失败：${(error as Error).message}`);
     }
 
-    const plugin = (module.default ?? module.plugin) as GamePlugin<any> | undefined;
-    if (
-      !plugin ||
-      typeof plugin.createState !== 'function' ||
-      typeof plugin.view !== 'function' ||
-      !plugin.states ||
-      !plugin.actions
-    ) {
-      throw new PluginError('invalid_module', `${key} 的 server.js 没有导出合法的 GamePlugin`);
-    }
-
-    const loaded: LoadedPlugin = {
-      gameId: record.gameId,
-      version: record.version,
-      manifest: record.manifest,
-      plugin,
-      dir: record.dir,
-    };
-    this.loaded.set(key, loaded);
-    return loaded;
+    this.loaded.set(key, runtime);
+    return runtime;
   }
 
-  get(gameId: string, version: string): LoadedPlugin | undefined {
-    return this.loaded.get(`${gameId}@${version}`);
+  get(gameId: string, version: string): PluginRuntime | undefined {
+    return this.loaded.get(this.key(gameId, version));
   }
 
   /** 桌子里锁定的版本可能不是 active（老桌），这里按需从库里补加载 */
-  async ensure(gameId: string, version: string): Promise<LoadedPlugin> {
+  async ensure(gameId: string, version: string): Promise<PluginRuntime> {
     const found = this.get(gameId, version);
     if (found) return found;
     const record = await this.store.getGameVersion(gameId, version);
@@ -90,8 +80,11 @@ export class PluginHost {
     return [...this.active.values()].map((record) => record.manifest);
   }
 
-  invalidate(gameId: string, version: string): void {
-    this.loaded.delete(`${gameId}@${version}`);
+  async invalidate(gameId: string, version: string): Promise<void> {
+    const key = this.key(gameId, version);
+    const runtime = this.loaded.get(key);
+    this.loaded.delete(key);
+    if (runtime) await runtime.terminate();
   }
 
   /**
@@ -105,12 +98,42 @@ export class PluginHost {
     await this.load(record);
     await this.store.setActiveVersion(gameId, version);
 
-    const updated: GameVersionRecord = {
-      ...record,
-      status: 'active',
-      activatedAt: Date.now(),
-    };
+    const updated: GameVersionRecord = { ...record, status: 'active', activatedAt: Date.now() };
     this.active.set(gameId, updated);
     return updated;
+  }
+
+  /**
+   * 回收：卸载既不是 active、也没有进行中牌桌在用的版本。
+   *
+   * 这就是 worker 隔离换来的东西——卸载 = terminate，模块图真能从内存消失；
+   * 之后若还有人要看回放，`ensure()` 会重新按需加载。
+   */
+  async releaseIdle(inUse: Set<string>): Promise<string[]> {
+    const released: string[] = [];
+
+    for (const [key, runtime] of [...this.loaded.entries()]) {
+      const isActive = this.active.get(runtime.gameId)?.version === runtime.version;
+      if (isActive) continue;
+      if (inUse.has(key)) continue;
+
+      this.loaded.delete(key);
+      await runtime.terminate();
+      released.push(key);
+    }
+
+    return released;
+  }
+
+  /** 当前内存里活着哪些版本（诊断用） */
+  loadedVersions(): string[] {
+    return [...this.loaded.keys()];
+  }
+
+  async closeAll(): Promise<void> {
+    for (const runtime of this.loaded.values()) {
+      await runtime.terminate().catch(() => undefined);
+    }
+    this.loaded.clear();
   }
 }

@@ -38,7 +38,7 @@ pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 apps/
   server/          Fastify + WS + 牌桌服务（CAS 并发）+ 存储 + 插件宿主
     src/db/        数据库抽象：PGlite(本地) / pg(生产) + 迁移
-    src/pluginHost/  编译 / 静态检查 / 冒烟 / 版本注册表
+    src/pluginHost/  编译 / 静态检查 / 冒烟 / 版本注册表 / worker 运行时
     src/elo.ts     多人局 Elo 评分
     src/presence.ts 在线人数（单实例内存实现）
   web/             React 宿主：登录 / 大厅 / 牌桌 / 回放 / 插件容器

@@ -12,16 +12,11 @@ import type {
   TableSummary,
 } from '@platform/sdk';
 import {
-  activePlayerOf,
-  applyAction,
-  applyTimeout,
-  createInitialState,
-  enumerateLegalMoves,
-  legalActions,
   RuleError,
 } from '@platform/engine';
 import type { EventBus } from './bus.js';
 import type { PluginHost } from './pluginHost/host.js';
+import type { PluginRuntime } from './pluginHost/runtime.js';
 import { hashState } from './hash.js';
 import { computeDeltas, DEFAULT_RATING } from './elo.js';
 import type { Presence } from './presence.js';
@@ -68,10 +63,9 @@ export class TableService {
    * 取这张桌锁定的插件版本。
    * 注意用的是 table.gameVersion 而不是"当前最新版本"——这就是版本固定的落点。
    */
-  private async pluginOf(table: TableRecord): Promise<GamePlugin<any>> {
+  private async runtimeOf(table: TableRecord): Promise<PluginRuntime> {
     try {
-      const loaded = await this.host.ensure(table.gameId, table.gameVersion);
-      return loaded.plugin;
+      return await this.host.ensure(table.gameId, table.gameVersion);
     } catch {
       throw new ServiceError(
         'plugin_missing',
@@ -174,9 +168,12 @@ export class TableService {
       if (table.hostId !== userId) throw new ServiceError('not_host', '只有房主可以开始');
       if (table.status !== 'lobby') throw new ServiceError('already_started', '对局已经开始');
 
-      const plugin = await this.pluginOf(table);
-      if (table.players.length < plugin.manifest.players.min) {
-        throw new ServiceError('not_enough_players', `至少需要 ${plugin.manifest.players.min} 人`);
+      const runtime = await this.runtimeOf(table);
+      if (table.players.length < runtime.manifest.players.min) {
+        throw new ServiceError(
+          'not_enough_players',
+          `至少需要 ${runtime.manifest.players.min} 人`,
+        );
       }
 
       const now = Date.now();
@@ -188,14 +185,14 @@ export class TableService {
         seed,
         now,
       };
-      const { state, effects } = createInitialState(plugin, setup);
+      const { state, effects, activePlayer } = await runtime.createState(setup);
 
-      table.state = state;
+      table.state = state as BaseState;
       table.status = 'playing';
       table.startedAt = now;
       table.seq += 1;
       this.appendLogs(table, effects, now);
-      this.refreshDeadline(table, plugin, now);
+      this.refreshDeadline(table, activePlayer, now);
 
       return {
         write: true,
@@ -224,21 +221,21 @@ export class TableService {
         throw new ServiceError('not_seated', '你不在这一桌');
       }
 
-      const plugin = await this.pluginOf(table);
+      const runtime = await this.runtimeOf(table);
       const now = Date.now();
 
       let applied;
       try {
-        applied = applyAction(plugin, table.state as any, userId, action, now);
+        applied = await runtime.applyAction(table.state, userId, action, now);
       } catch (error) {
         if (error instanceof RuleError) throw new ServiceError(error.code, error.message);
         throw error;
       }
 
-      table.state = applied.state;
+      table.state = applied.state as BaseState;
       table.seq += 1;
       this.appendLogs(table, applied.effects, now);
-      this.settle(table, plugin, now);
+      this.settle(table, applied.activePlayer, now);
 
       return {
         write: true,
@@ -267,9 +264,9 @@ export class TableService {
             return { write: false, result: undefined };
           }
 
-          const plugin = await this.pluginOf(table);
+          const runtime = await this.runtimeOf(table);
           const at = Date.now();
-          const applied = applyTimeout(plugin, table.state as any, at);
+          const applied = await runtime.applyTimeout(table.state, at);
 
           if (!applied) {
             // 插件没有兜底策略，停掉计时器避免空转
@@ -278,10 +275,10 @@ export class TableService {
             return { write: true, result: undefined };
           }
 
-          table.state = applied.state;
+          table.state = applied.state as BaseState;
           table.seq += 1;
           this.appendLogs(table, applied.effects, at);
-          this.settle(table, plugin, at);
+          this.settle(table, applied.activePlayer, at);
 
           return {
             write: true,
@@ -311,7 +308,7 @@ export class TableService {
     const table = await this.store.getTable(tableId);
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
-    const plugin = await this.pluginOf(table);
+    const runtime = await this.runtimeOf(table);
     const isPlayer = table.players.some((player) => player.id === viewerId);
 
     let view: PublicView | null = null;
@@ -320,12 +317,16 @@ export class TableService {
     let legalMoves: AnyAction[] = [];
 
     if (table.state) {
-      view = plugin.view(table.state as any, isPlayer ? viewerId : 'spectator');
-      activePlayer = activePlayerOf(plugin, table.state as any);
-      if (isPlayer) {
-        legal = legalActions(plugin, table.state as any, viewerId);
-        legalMoves = enumerateLegalMoves(plugin, table.state as any, viewerId);
-      }
+      // 一次跨线程调用拿齐视图 / 当前玩家 / 合法动作，避免每个快照打好几个来回
+      const described = await runtime.describe(
+        table.state,
+        isPlayer ? viewerId : 'spectator',
+        isPlayer ? viewerId : undefined,
+      );
+      view = described.view;
+      activePlayer = described.activePlayer;
+      legal = described.legal;
+      legalMoves = described.legalMoves;
     }
 
     const chat = await this.store.listChat(table.id, 30);
@@ -333,12 +334,12 @@ export class TableService {
     return {
       tableId: table.id,
       gameId: table.gameId,
-      gameName: plugin.manifest.name,
+      gameName: runtime.manifest.name,
       gameVersion: table.gameVersion,
       status: table.status,
       seq: table.seq,
       hostId: table.hostId,
-      minPlayers: plugin.manifest.players.min,
+      minPlayers: runtime.manifest.players.min,
       maxPlayers: table.maxPlayers,
       options: table.options,
       players: table.players.map((player) => ({ ...player })),
@@ -399,7 +400,7 @@ export class TableService {
     const table = await this.store.getTable(tableId);
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
-    const plugin = await this.pluginOf(table);
+    const runtime = await this.runtimeOf(table);
     const rows = await this.store.listActions(tableId);
     const start = rows.find((row) => row.kind === 'start');
     if (!start) throw new ServiceError('no_replay', '这局还没有可回放的记录');
@@ -411,29 +412,32 @@ export class TableService {
       throw new ServiceError('no_replay', '建局记录不完整，无法回放');
     }
 
-    let state = createInitialState(plugin, {
-      players: setup.players,
-      options: setup.options ?? {},
-      seed: setup.seed,
-      now: 0,
-    }).state;
+    let state = (
+      await runtime.createState({
+        players: setup.players,
+        options: setup.options ?? {},
+        seed: setup.seed,
+        now: 0,
+      })
+    ).state;
 
     const steps: ReplayStep[] = [];
     const logs: LogEntry[] = [];
     let truncated = false;
 
-    const pushStep = (seq: number, kind: string, actor: string | null): void => {
+    const pushStep = async (seq: number, kind: string, actor: string | null): Promise<void> => {
+      const described = await runtime.describe(state, 'spectator');
       steps.push({
         seq,
         kind,
         actor,
         // 回放一律按观战者视角裁剪：不该看到的东西，看回放也不该看到
-        view: plugin.view(state, 'spectator'),
+        view: described.view,
         log: logs.slice(-60),
       });
     };
 
-    pushStep(start.seq, 'start', start.actor);
+    await pushStep(start.seq, 'start', start.actor);
 
     for (const row of rows) {
       if (row.kind === 'start') continue;
@@ -443,16 +447,17 @@ export class TableService {
       }
       if (!row.action || !row.actor) continue;
 
-      state = applyAction(plugin, state, row.actor, row.action as AnyAction, Number(row.createdAt))
-        .state;
+      state = (
+        await runtime.applyAction(state, row.actor, row.action as AnyAction, Number(row.createdAt))
+      ).state;
       this.pushLogs(logs, (row.effects as Effect[]) ?? [], Number(row.createdAt));
-      pushStep(row.seq, row.kind, row.actor);
+      await pushStep(row.seq, row.kind, row.actor);
     }
 
     return {
       tableId: table.id,
       gameId: table.gameId,
-      gameName: plugin.manifest.name,
+      gameName: runtime.manifest.name,
       gameVersion: table.gameVersion,
       status: table.status,
       players: table.players.map((player) => ({ ...player })),
@@ -551,13 +556,8 @@ export class TableService {
     if (table.log.length > MAX_LOG) table.log.splice(0, table.log.length - MAX_LOG);
   }
 
-  private refreshDeadline(table: TableRecord, plugin: GamePlugin<any>, now: number): void {
-    if (!table.state || table.status !== 'playing') {
-      table.deadlineAt = null;
-      return;
-    }
-    const active = activePlayerOf(plugin, table.state as any);
-    if (!active) {
+  private refreshDeadline(table: TableRecord, activePlayer: string | null, now: number): void {
+    if (!table.state || table.status !== 'playing' || !activePlayer) {
       table.deadlineAt = null;
       return;
     }
@@ -566,13 +566,13 @@ export class TableService {
     table.deadlineAt = now + turnMs;
   }
 
-  private settle(table: TableRecord, plugin: GamePlugin<any>, now: number): void {
+  private settle(table: TableRecord, activePlayer: string | null, now: number): void {
     if (table.state?.finished) {
       table.status = 'finished';
       table.finishedAt = now;
       table.deadlineAt = null;
       return;
     }
-    this.refreshDeadline(table, plugin, now);
+    this.refreshDeadline(table, activePlayer, now);
   }
 }

@@ -75,6 +75,12 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     await host.refresh();
   }
 
+  /** 卸载"既不是 active、也没有进行中牌桌在用"的版本 worker */
+  const collectGarbage = async (): Promise<string[]> => {
+    const inUse = await store.listInUseVersions();
+    return host.releaseIdle(inUse);
+  };
+
   /* ---------------------- 插件产物静态托管 ---------------------- */
   // URL 里带版本号，所以可以放心长缓存：发新版换 URL，老桌继续用老 URL
   await app.register(fastifyStatic, {
@@ -206,7 +212,18 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     await requireAdmin(request);
     const { gameId, version } = request.params as { gameId: string; version: string };
     const record = await host.setActive(gameId, version);
+    await collectGarbage();
     return { ok: true, activatedAt: record.activatedAt };
+  });
+
+  /**
+   * 回收：把"不是 active、也没有进行中牌桌在用"的插件 worker 卸载掉。
+   * 卸载后如果有人还要看回放，会按需重新加载。
+   */
+  app.post('/api/admin/plugins/gc', async (request) => {
+    await requireAdmin(request);
+    const released = await collectGarbage();
+    return { released, loaded: host.loadedVersions() };
   });
 
   /** 开发便利：重新扫描 games/ 并发布，不用重启服务 */
@@ -270,6 +287,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
   app.addHook('onClose', async () => {
     clearInterval(timer);
+    await host.closeAll();
     if (ownsDb) await db.close();
   });
 

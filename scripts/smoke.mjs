@@ -514,6 +514,32 @@ mandalaAlice.close();
 mandalaBob.close();
 watcherWs.close();
 
+/* ------------------------------ worker 回收 ------------------------------ */
+
+console.log('\n▶ 阶段七：worker 回收与按需重载');
+
+const gc = await api2('/admin/plugins/gc', { token: alice.token, method: 'POST' });
+assert.ok(
+  gc.released.includes('dice@0.1.0'),
+  `应卸载已无进行中牌桌的 dice@0.1.0，实际 ${JSON.stringify(gc.released)}`,
+);
+assert.ok(!gc.loaded.includes('dice@0.1.0'), '卸载后不应还留在内存里');
+assert.ok(gc.loaded.includes('dice@0.2.0'), 'active 版本不应被卸载');
+assert.ok(gc.loaded.includes('mandala@0.1.0'), '有进行中牌桌的版本不应被卸载');
+console.log(`✓ 回收：卸载 ${gc.released.join(', ')}；内存里剩 ${gc.loaded.join(', ')}`);
+
+// 老桌的回放会按需把 0.1.0 重新加载回来
+const replayAfterGc = await api2(`/tables/${tableA}/replay`, { token: alice.token });
+assert.equal(replayAfterGc.replay.steps.length, rows.length, '重载后回放步数应一致');
+
+// 再回收一次：如果回放真的把 0.1.0 加载回来了，这次它会再次出现在 released 里
+const secondGc = await api2('/admin/plugins/gc', { token: alice.token, method: 'POST' });
+assert.ok(
+  secondGc.released.includes('dice@0.1.0'),
+  '回放应按需重新加载旧版本（否则第二次回收不会再次命中它）',
+);
+console.log('✓ 按需重载：回放触发重新加载，内容完全一致');
+
 /* ------------------------------ 收尾 ------------------------------ */
 
 clients2.alice.close();

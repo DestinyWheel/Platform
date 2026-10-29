@@ -76,6 +76,8 @@ export interface Store {
   markVersionFailed(gameId: string, version: string, error: string): Promise<void>;
   /** 事务：把该游戏原 active 版本降级为 retired，再激活指定版本 */
   setActiveVersion(gameId: string, version: string): Promise<void>;
+  /** 还有进行中牌桌在用的版本（`gameId@version`），用于判断能否卸载 */
+  listInUseVersions(): Promise<Set<string>>;
 
   /* ------------------------- 聊天 / 战绩 ------------------------- */
   listActions(tableId: string): Promise<ActionRow[]>;
@@ -392,6 +394,13 @@ export class PgStore implements Store {
   }
 
   /* ------------------------- 聊天 / 战绩 ------------------------- */
+
+  async listInUseVersions(): Promise<Set<string>> {
+    const rows = await this.db.query<{ game_id: string; game_version: string }>(
+      `SELECT DISTINCT game_id, game_version FROM tables WHERE status <> 'finished'`,
+    );
+    return new Set(rows.map((row) => `${row.game_id}@${row.game_version}`));
+  }
 
   async listActions(tableId: string): Promise<ActionRow[]> {
     const rows = await this.db.query<{
