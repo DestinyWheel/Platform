@@ -7,6 +7,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# 前端预览产物（scripts/preview-mandala.mjs 的输出）
+.preview/
+
 # 运行时产物：插件编译结果、打包上传用的 zip
 storage/
 

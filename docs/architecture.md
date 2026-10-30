@@ -564,6 +564,10 @@ export async function loadGameClient(gameId: string, version: string) {
 
 **静态检查 + 冒烟测试**是双保险：前者拦住"用了全局随机"，后者拦住"逻辑上不纯"。
 
+静态检查**顺着服务端的 import 图走**，只查真正会被 reducer 加载的源码。客户端不在范围内——
+`src/client.ts` 里的 `Date.now()` 只是动画计时，禁掉它没有道理（这条边界以前画错过，
+结果一个正常的客户端会被判成"不确定"）。
+
 ---
 
 ## 9. 计时器与超时

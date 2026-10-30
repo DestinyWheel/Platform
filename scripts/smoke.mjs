@@ -138,7 +138,7 @@ async function rollOnce(clients, tableId) {
 }
 
 /** 把 games/dice 复制一份、改版本号、打成 zip，模拟一次后台上传 */
-function buildPackage(version, notes = null) {
+function buildPackage(version, notes = null, patchServer = null) {
   const dir = path.join(pkgDir, `dice-${version}`);
   mkdirSync(dir, { recursive: true });
   // 不带 node_modules：插件包里本来就不该有依赖目录（依赖由宿主解析），
@@ -153,6 +153,11 @@ function buildPackage(version, notes = null) {
   manifest.version = version;
   if (notes) manifest.notes = notes;
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  if (patchServer) {
+    const serverPath = path.join(dir, 'src', 'server.ts');
+    writeFileSync(serverPath, `${readFileSync(serverPath, 'utf8')}\n${patchServer}\n`);
+  }
 
   const zip = new AdmZip();
   zip.addFile('manifest.json', readFileSync(manifestPath));
@@ -1131,6 +1136,19 @@ assert.ok(
 );
 assert.equal(quickSnap.snapshot.status, 'lobby');
 console.log(`✓ 随机加入：${quick.created ? '没有等人的桌，现开了一张' : '进了一张正在等人的桌'}`);
+
+// 确定性扫描只针对服务端代码：客户端用 Date.now() 做动画是合法的
+await expectFailure(
+  api2('/admin/plugins', {
+    token: alice.token,
+    method: 'POST',
+    raw: buildPackage('0.9.9', null, 'export const _now = Date.now();'),
+  }),
+  400,
+  'nondeterministic',
+  '服务端用了 Date.now',
+);
+console.log('✓ 服务端代码里出现 Date.now() 会被发布流水线挡下（客户端不受这条约束）');
 
 /* ------------------------------ 收尾 ------------------------------ */
 

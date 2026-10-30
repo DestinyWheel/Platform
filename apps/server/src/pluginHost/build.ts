@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -52,35 +52,96 @@ async function firstExisting(sourceDir: string, candidates: string[]): Promise<s
   return null;
 }
 
-export function assertDeterministic(code: string): void {
-  const hits = FORBIDDEN.filter((rule) => rule.pattern.test(code)).map((rule) => rule.label);
-  if (hits.length > 0) {
+export interface SourceFile {
+  file: string;
+  code: string;
+}
+
+/**
+ * 校验**会被服务端加载**的源码。
+ *
+ * 为什么不是整个 src/：确定性约束是为了"同一份动作日志能重放出同一个局面"，
+ * 那是 reducer 的事。客户端的 `Date.now()` 只是动画计时，禁掉它没道理——
+ * 之前的实现扫了整个目录，导致一个正常的 client.ts 直接被判为不确定。
+ */
+export function assertDeterministic(sources: SourceFile[], root?: string): void {
+  const problems: string[] = [];
+
+  for (const source of sources) {
+    const hits = FORBIDDEN.filter((rule) => rule.pattern.test(source.code)).map(
+      (rule) => rule.label,
+    );
+    if (hits.length === 0) continue;
+    const name = root ? path.relative(root, source.file) : source.file;
+    problems.push(`${name}：${hits.join('、')}`);
+  }
+
+  if (problems.length > 0) {
     throw new PluginError(
       'nondeterministic',
-      `插件代码里出现了不允许的调用：${hits.join('、')}。` +
-        '随机数用 ctx.rng()，时间用 ctx.now，副作用用 ctx.emit()。',
+      `服务端代码里出现了不允许的调用 —— ${problems.join('；')}。` +
+        '随机数用 ctx.rng()，时间用 ctx.now，副作用用 ctx.emit()。' +
+        '（客户端代码不受这条约束）',
     );
   }
 }
 
-/** 只扫作者自己写的源码：依赖库里的 Date.now 不该算到插件头上 */
-async function collectSources(dir: string): Promise<string> {
-  let code = '';
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return code;
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      code += await collectSources(full);
-    } else if (/\.(ts|tsx|js|mjs|cjs|jsx)$/.test(entry.name)) {
-      code += await readFile(full, 'utf8');
+/** `./x.js` 在 TS 源码里通常实际是 x.ts，两种都要试 */
+async function resolveImport(base: string): Promise<string | null> {
+  const withoutExt = base.replace(/\.(js|mjs|cjs)$/, '');
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${withoutExt}.ts`,
+    `${withoutExt}.tsx`,
+    `${withoutExt}.js`,
+    path.join(base, 'index.ts'),
+    path.join(base, 'index.js'),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const info = await stat(candidate);
+      if (info.isFile()) return candidate;
+    } catch {
+      // 继续试下一个
     }
   }
-  return code;
+  return null;
+}
+
+/**
+ * 从服务端入口顺着相对 import 走一遍，只收真正会被服务端加载的文件。
+ * 这样 `src/client.ts`（通常不 import 服务端文件）自然落在检查范围之外。
+ */
+async function collectServerSources(entry: string): Promise<SourceFile[]> {
+  const seen = new Set<string>();
+  const collected: SourceFile[] = [];
+  const queue: string[] = [entry];
+
+  while (queue.length > 0) {
+    const file = path.resolve(queue.shift()!);
+    if (seen.has(file)) continue;
+    seen.add(file);
+
+    let code: string;
+    try {
+      code = await readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    collected.push({ file, code });
+
+    for (const match of code.matchAll(/from\s*['"](\.[^'"]+)['"]/g)) {
+      const specifier = match[1];
+      if (!specifier) continue;
+      const resolved = await resolveImport(path.resolve(path.dirname(file), specifier));
+      if (resolved) queue.push(resolved);
+    }
+  }
+
+  return collected;
 }
 
 /**
@@ -129,8 +190,11 @@ export async function buildPlugin(sourceDir: string, outDir: string): Promise<Bu
   const serverCode = await readFile(serverJs, 'utf8');
   const clientCode = await readFile(clientJs, 'utf8');
 
-  // 校验作者源码，而不是编译产物（产物里会有第三方库）
-  assertDeterministic(await collectSources(path.join(sourceDir, 'src')));
+  // 校验作者源码，而不是编译产物（产物里会有第三方库）；只查服务端会加载的那部分
+  assertDeterministic(
+    await collectServerSources(serverEntry),
+    path.join(sourceDir, 'src'),
+  );
 
   const hash = createHash('sha256')
     .update(serverCode)

@@ -31,6 +31,8 @@ pnpm test         # 单元测试（引擎 / Elo / 密码 / 令牌 / 哈希）
 pnpm build        # 构建前端到 apps/web/dist
 pnpm smoke        # 端到端：十三段，从注册登录到对局/人机/管理后台/限流/备份全跑一遍
 pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
+
+node scripts/preview-mandala.mjs   # 用 headless Chrome 截图看插件 UI（输出到 .preview/）
 ```
 
 ## 架构
