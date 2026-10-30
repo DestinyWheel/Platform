@@ -15,6 +15,7 @@ const MIGRATIONS = [
   { version: 3, file: '003_social.sql' },
   { version: 4, file: '004_ratings.sql' },
   { version: 5, file: '005_auth.sql' },
+  { version: 6, file: '006_tables.sql' },
 ];
 
 export interface DbOptions {

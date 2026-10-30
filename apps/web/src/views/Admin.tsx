@@ -53,6 +53,11 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [versions, setVersions] = useState<AdminPluginVersion[]>([]);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
+  const [backups, setBackups] = useState<{
+    keep: number;
+    bytes: number;
+    files: { name: string; bytes: number; createdAt: number }[];
+  }>({ keep: 14, bytes: 0, files: [] });
   /** 重置出来的临时口令只显示这一次，关掉就再也看不到 */
   const [secret, setSecret] = useState<{ name: string; password: string } | null>(null);
 
@@ -60,7 +65,9 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
 
   const loadOverview = useCallback(async (): Promise<void> => {
     try {
-      setOverview(await api.adminOverview());
+      const [data, backupList] = await Promise.all([api.adminOverview(), api.adminBackups()]);
+      setOverview(data);
+      setBackups(backupList);
       setError(null);
     } catch (err) {
       setError(messageOf(err));
@@ -151,7 +158,9 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
   const backup = (): void => {
     void run('backup', async () => {
       const result = await api.adminBackup();
-      return `备份已写入 ${result.file}（${formatBytes(result.bytes)}）`;
+      await loadOverview();
+      const pruned = result.pruned.length > 0 ? `，清理了 ${result.pruned.length} 份旧备份` : '';
+      return `备份已写入 ${result.file}（${formatBytes(result.bytes)}）${pruned}`;
     });
   };
 
@@ -280,6 +289,22 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
                   逻辑备份（整库导出 gzip JSON，落在 storage/backups/），恢复用 scripts/restore.mjs
                 </span>
               </div>
+              <div className="muted small">
+                已保留 {backups.files.length} / {backups.keep} 份，共 {formatBytes(backups.bytes)}
+                ；超出份数会自动删最旧的。
+              </div>
+              {backups.files.length > 0 ? (
+                <ul className="backup-list">
+                  {backups.files.slice(0, 5).map((file) => (
+                    <li key={file.name}>
+                      <span className="mono small">{file.name}</span>
+                      <span className="muted small">
+                        {formatBytes(file.bytes)} · {formatTime(file.createdAt)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </>
           ) : (
             <div className="muted">加载中…</div>

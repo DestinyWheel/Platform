@@ -10,6 +10,7 @@
     "dev:web": "pnpm --filter @platform/web dev",
     "build": "pnpm --filter @platform/web build",
     "typecheck": "pnpm -r typecheck",
+    "test": "node --import tsx --test tests/unit.test.ts",
     "smoke": "tsx scripts/smoke.mjs",
     "pack:game": "node scripts/pack-game.mjs"
   },

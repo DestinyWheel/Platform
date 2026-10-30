@@ -25,10 +25,14 @@ export interface TablePlayer {
   name: string;
   seat: number;
   bot: boolean;
+  /** 中途认负退出：还留在名单里（要算战绩），但「再来一局」不会再拖上他 */
+  forfeited?: boolean;
 }
 
 export interface TableRecord {
   id: string;
+  /** 6 位房间码；迁移前建的老桌是 null */
+  code: string | null;
   gameId: string;
   gameVersion: string;
   hostId: string;
@@ -44,6 +48,19 @@ export interface TableRecord {
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
+  /**
+   * 平台自己算出来的结算结果（认负、房主解散这类插件没算过 ranking 的情形）。
+   * recordResult 优先读它，读不到才回落到插件状态里的 ranking。
+   */
+  result: TableResult | null;
+}
+
+export interface TableResult {
+  /** 和 BaseState.ranking 同构：并列的放同一子数组，靠前的名次更高 */
+  ranking: string[][];
+  reason: 'forfeit' | 'abandon';
+  /** 认负 / 解散的责任人 */
+  by?: string;
 }
 
 /** 一次状态变化要落进 match_actions 的记录 */
@@ -60,6 +77,8 @@ export interface TableWrite {
   table: TableRecord;
   expectedSeq: number;
   log?: ActionLog;
+  /** 每 50 步存一份回放快照，和状态更新放在同一个事务里 */
+  snapshot?: { state: unknown; hash: string };
 }
 
 export interface Store {
@@ -83,8 +102,23 @@ export interface Store {
    */
   updateTable(write: TableWrite): Promise<boolean>;
   listTables(): Promise<TableRecord[]>;
+  /** 按房间码找桌（6 位，大小写不敏感） */
+  findTableByCode(code: string): Promise<TableRecord | undefined>;
+  /** 随机加入：找一张等待中、还坐得下人的桌 */
+  findOpenTable(gameId?: string): Promise<TableRecord | undefined>;
+  /** 我参与的、还没结束的桌 */
+  listMyTables(userId: string, limit: number): Promise<TableRecord[]>;
   /** 已到期需要代走的桌（只取 status='playing'） */
   listExpired(now: number): Promise<TableRecord[]>;
+
+  /* ------------------------- 回放快照 / 公告 ------------------------- */
+  /** 取 seq <= at 的最近一份快照 */
+  latestSnapshot(
+    tableId: string,
+    at: number,
+  ): Promise<{ seq: number; state: unknown } | undefined>;
+  hasAckedVersion(userId: string, gameId: string, version: string): Promise<boolean>;
+  ackVersion(userId: string, gameId: string, version: string): Promise<void>;
 
   /* ------------------------- 插件版本 ------------------------- */
   getGameVersion(gameId: string, version: string): Promise<GameVersionRecord | undefined>;
@@ -188,6 +222,7 @@ export interface GameVersionRecord {
 
 interface TableRow {
   id: string;
+  code: string | null;
   game_id: string;
   game_version: string;
   host_id: string;
@@ -202,11 +237,13 @@ interface TableRow {
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
+  result: TableResult | null;
 }
 
 function toRecord(row: TableRow): TableRecord {
   return {
     id: row.id,
+    code: row.code ?? null,
     gameId: row.game_id,
     gameVersion: row.game_version,
     hostId: row.host_id,
@@ -221,6 +258,7 @@ function toRecord(row: TableRow): TableRecord {
     createdAt: Number(row.created_at),
     startedAt: row.started_at === null ? null : Number(row.started_at),
     finishedAt: row.finished_at === null ? null : Number(row.finished_at),
+    result: row.result ?? null,
   };
 }
 
@@ -317,11 +355,12 @@ export class PgStore implements Store {
   async createTable(record: TableRecord): Promise<void> {
     await this.db.execute(
       `INSERT INTO tables
-         (id, game_id, game_version, host_id, status, players, max_players, options,
-          state, seq, log, deadline_at, created_at, started_at, finished_at)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9::jsonb,$10,$11::jsonb,$12,$13,$14,$15)`,
+         (id, code, game_id, game_version, host_id, status, players, max_players, options,
+          state, seq, log, deadline_at, created_at, started_at, finished_at, result)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb)`,
       [
         record.id,
+        record.code,
         record.gameId,
         record.gameVersion,
         record.hostId,
@@ -336,6 +375,7 @@ export class PgStore implements Store {
         record.createdAt,
         record.startedAt,
         record.finishedAt,
+        record.result === null ? null : JSON.stringify(record.result),
       ],
     );
   }
@@ -347,14 +387,15 @@ export class PgStore implements Store {
   }
 
   async updateTable(write: TableWrite): Promise<boolean> {
-    const { table, expectedSeq, log } = write;
+    const { table, expectedSeq, log, snapshot } = write;
 
     return this.db.transaction(async (tx) => {
       const updated = await tx.query<{ seq: number }>(
         `UPDATE tables SET
            players = $1::jsonb, status = $2, state = $3::jsonb, seq = $4, log = $5::jsonb,
-           deadline_at = $6, started_at = $7, finished_at = $8
-         WHERE id = $9 AND seq = $10
+           deadline_at = $6, started_at = $7, finished_at = $8, result = $9::jsonb,
+           host_id = $12
+         WHERE id = $10 AND seq = $11
          RETURNING seq`,
         [
           JSON.stringify(table.players),
@@ -365,8 +406,10 @@ export class PgStore implements Store {
           table.deadlineAt,
           table.startedAt,
           table.finishedAt,
+          table.result === null ? null : JSON.stringify(table.result),
           table.id,
           expectedSeq,
+          table.hostId,
         ],
       );
 
@@ -389,6 +432,15 @@ export class PgStore implements Store {
         );
       }
 
+      if (snapshot) {
+        await tx.execute(
+          `INSERT INTO match_snapshots (table_id, seq, state, state_hash, created_at)
+           VALUES ($1,$2,$3::jsonb,$4,$5)
+           ON CONFLICT (table_id, seq) DO NOTHING`,
+          [table.id, table.seq, JSON.stringify(snapshot.state), snapshot.hash, Date.now()],
+        );
+      }
+
       return true;
     });
   }
@@ -407,6 +459,72 @@ export class PgStore implements Store {
       [now],
     );
     return rows.map(toRecord);
+  }
+
+  async findTableByCode(code: string): Promise<TableRecord | undefined> {
+    // 房间码不区分大小写：念出来的东西不该逼人回忆是大写还是小写
+    const rows = await this.db.query<TableRow>(
+      'SELECT * FROM tables WHERE upper(code) = upper($1) ORDER BY created_at DESC LIMIT 1',
+      [code],
+    );
+    const row = rows[0];
+    return row ? toRecord(row) : undefined;
+  }
+
+  async findOpenTable(gameId?: string): Promise<TableRecord | undefined> {
+    // 只找还能坐人的等待中牌桌；老桌（code 为 null）也算，照样能坐下
+    const rows = await this.db.query<TableRow>(
+      `SELECT * FROM tables
+        WHERE status = 'lobby'
+          AND jsonb_array_length(players) < max_players
+          AND ($1::text IS NULL OR game_id = $1)
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [gameId ?? null],
+    );
+    const row = rows[0];
+    return row ? toRecord(row) : undefined;
+  }
+
+  async listMyTables(userId: string, limit: number): Promise<TableRecord[]> {
+    const rows = await this.db.query<TableRow>(
+      `SELECT * FROM tables
+        WHERE status <> 'finished' AND players @> $1::jsonb
+        ORDER BY created_at DESC
+        LIMIT $2`,
+      [JSON.stringify([{ id: userId }]), limit],
+    );
+    return rows.map(toRecord);
+  }
+
+  async latestSnapshot(
+    tableId: string,
+    at: number,
+  ): Promise<{ seq: number; state: unknown } | undefined> {
+    const rows = await this.db.query<{ seq: number; state: unknown }>(
+      `SELECT seq, state FROM match_snapshots
+        WHERE table_id = $1 AND seq <= $2
+        ORDER BY seq DESC LIMIT 1`,
+      [tableId, at],
+    );
+    const row = rows[0];
+    return row ? { seq: Number(row.seq), state: row.state } : undefined;
+  }
+
+  async hasAckedVersion(userId: string, gameId: string, version: string): Promise<boolean> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM version_acks WHERE user_id = $1 AND game_id = $2 AND version = $3',
+      [userId, gameId, version],
+    );
+    return Number(rows[0]?.n ?? 0) > 0;
+  }
+
+  async ackVersion(userId: string, gameId: string, version: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO version_acks (user_id, game_id, version, acked_at)
+       VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+      [userId, gameId, version, Date.now()],
+    );
   }
 
   /* ------------------------- 插件版本 ------------------------- */
@@ -784,9 +902,11 @@ const DUMP_TABLES = [
   'game_versions',
   'tables',
   'match_actions',
+  'match_snapshots',
   'table_chat',
   'match_results',
   'ratings',
+  'version_acks',
 ] as const;
 
 interface GameVersionRow {

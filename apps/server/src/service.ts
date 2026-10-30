@@ -26,6 +26,19 @@ const DEFAULT_TURN_MS = 30_000;
 const MAX_LOG = 200;
 const MAX_CAS_ATTEMPTS = 5;
 const MAX_REPLAY_STEPS = 400;
+/** 每多少步存一份回放快照 */
+const SNAPSHOT_EVERY = 50;
+
+/** 房间码字母表：去掉 0/O/1/I/L，念出来不会听错 */
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+function randomCode(length = 6): string {
+  let code = '';
+  for (let index = 0; index < length; index += 1) {
+    code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  }
+  return code;
+}
 
 export class ServiceError extends Error {
   constructor(
@@ -94,7 +107,16 @@ export class TableService {
       const outcome = await mutate(table);
       if (!outcome.write) return outcome.result;
 
-      const saved = await this.store.updateTable({ table, expectedSeq, log: outcome.log });
+      const saved = await this.store.updateTable({
+        table,
+        expectedSeq,
+        log: outcome.log,
+        // 每 50 步留一份快照，回放很长时从最近的一份起算，不用从第 0 步重放
+        snapshot:
+          table.state && table.seq % SNAPSHOT_EVERY === 0
+            ? { state: table.state, hash: hashState(table.state) }
+            : undefined,
+      });
       if (saved) {
         this.bus.publish(tableId);
         // 结算在这一步之后做：只有 CAS 成功才算这局真的结束了
@@ -123,6 +145,7 @@ export class TableService {
     const now = Date.now();
     const record: TableRecord = {
       id: randomUUID(),
+      code: await this.allocateCode(),
       gameId: active.manifest.id,
       // ★ 建桌这一刻锁定版本：之后发新版不会影响这一桌
       gameVersion: active.version,
@@ -138,10 +161,20 @@ export class TableService {
       createdAt: now,
       startedAt: null,
       finishedAt: null,
+      result: null,
     };
 
     await this.store.createTable(record);
     return record.id;
+  }
+
+  /** 房间码撞了就换一个；6 位 31 进制，撞车概率低到可以忽略，但还是认真重试 */
+  private async allocateCode(): Promise<string> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const code = randomCode();
+      if (!(await this.store.findTableByCode(code))) return code;
+    }
+    throw new ServiceError('code_exhausted', '生成房间号失败，稍后再试');
   }
 
   async joinTable(tableId: string, user: UserRecord): Promise<void> {
@@ -165,6 +198,175 @@ export class TableService {
       table.seq += 1;
       return { write: true, result: undefined };
     });
+  }
+
+  /**
+   * 按房间号加入。已经开打的桌不允许再坐进来，但可以当观战入口——
+   * 朋友发来"房间号 ABC234"，点进去至少能看到这局在打什么。
+   */
+  async joinByCode(code: string, user: UserRecord): Promise<string> {
+    const trimmed = code.trim().toUpperCase();
+    if (!trimmed) throw new ServiceError('bad_code', '请输入房间号');
+
+    const table = await this.store.findTableByCode(trimmed);
+    if (!table) throw new ServiceError('no_such_room', '没有这个房间号');
+
+    if (table.status !== 'lobby') return table.id;
+
+    await this.joinTable(table.id, user);
+    return table.id;
+  }
+
+  /**
+   * 随机加入：找一张还在等人、还有空位的桌。
+   * 找不到就直接开一张——否则按钮点下去毫无反应，是最差的手感。
+   */
+  async quickMatch(user: UserRecord, gameId?: string): Promise<{ id: string; created: boolean }> {
+    const target = gameId ?? this.host.listActive()[0]?.id;
+    if (!target) throw new ServiceError('no_games', '还没有可玩的游戏');
+
+    const open = await this.store.findOpenTable(target);
+    if (open) {
+      if (open.players.some((player) => player.id === user.id)) {
+        return { id: open.id, created: false };
+      }
+      try {
+        await this.joinTable(open.id, user);
+        return { id: open.id, created: false };
+      } catch (error) {
+        // 刚好被人坐满：那就自己开一张，别把错误丢给用户
+        if (!(error instanceof ServiceError)) throw error;
+      }
+    }
+
+    return { id: await this.createTable(user, { gameId: target }), created: true };
+  }
+
+  /**
+   * 未开局时离开。
+   *
+   * 房主走了就把房主顺位交给下一个人——否则这张桌谁也开不了，只能烂在大厅里。
+   */
+  async leave(tableId: string, userId: string): Promise<void> {
+    await this.withTable(tableId, (table) => {
+      if (table.status !== 'lobby') {
+        throw new ServiceError('already_started', '对局已经开始，要离开请认负');
+      }
+      const index = table.players.findIndex((player) => player.id === userId);
+      if (index < 0) throw new ServiceError('not_seated', '你不在这一桌');
+
+      const now = Date.now();
+      const leaving = table.players[index]!;
+      table.players.splice(index, 1);
+      table.players.forEach((player, seat) => {
+        player.seat = seat;
+      });
+      table.seq += 1;
+
+      if (table.players.length === 0) {
+        // 最后一个人走了：这桌就没意义了，直接关掉（不产生战绩）
+        table.status = 'finished';
+        table.finishedAt = now;
+        table.result = { ranking: [], reason: 'abandon', by: userId };
+        table.deadlineAt = null;
+      } else if (table.hostId === userId) {
+        table.hostId = table.players[0]!.id;
+        this.pushLogs(
+          table.log,
+          [
+            {
+              type: 'log',
+              key: 'table.host_transferred',
+              args: { from: leaving.name, to: table.players[0]!.name },
+            },
+          ],
+          now,
+        );
+      }
+
+      return { write: true, result: undefined };
+    });
+  }
+
+  /**
+   * 已开局时退出 = 认负。
+   *
+   * 不写 match_actions：那条日志是用来重演的，塞一个插件不认识的动作会让回放断掉。
+   * 结果落在 tables.result 上，recordResult 会优先读它。
+   */
+  async forfeit(tableId: string, userId: string): Promise<void> {
+    await this.withTable(tableId, (table) => {
+      if (table.status !== 'playing') {
+        throw new ServiceError('not_playing', '对局还没开始或已经结束');
+      }
+      const me = table.players.find((player) => player.id === userId);
+      if (!me) throw new ServiceError('not_seated', '你不在这一桌');
+
+      const now = Date.now();
+      const others = table.players
+        .filter((player) => player.id !== userId)
+        .map((player) => [player.id]);
+
+      table.result = { ranking: [...others, [userId]], reason: 'forfeit', by: userId };
+      me.forfeited = true;
+      table.status = 'finished';
+      table.finishedAt = now;
+      table.deadlineAt = null;
+      table.seq += 1;
+      this.pushLogs(
+        table.log,
+        [{ type: 'log', key: 'table.forfeit', args: { name: me.name } }],
+        now,
+      );
+
+      return { write: true, result: undefined, activePlayer: null };
+    });
+  }
+
+  /**
+   * 再来一局：原班人马、原版本、原设置，开一张新桌。
+   *
+   * 注意版本用的是 `table.gameVersion` 而不是当前最新版——发新版是"新桌用新版"，
+   * 不该顺带把这一桌的人偷偷换到另一套规则上。
+   */
+  async rematch(tableId: string, user: UserRecord): Promise<string> {
+    const table = await this.store.getTable(tableId);
+    if (!table) throw new ServiceError('no_table', '牌桌不存在');
+    if (table.status !== 'finished') throw new ServiceError('not_finished', '这一局还没结束');
+    if (!table.players.some((player) => player.id === user.id)) {
+      throw new ServiceError('not_seated', '你不在这一桌');
+    }
+
+    // 认负退出的人不再拉进下一局：他想玩可以自己按房间号回来
+    const humans = table.players.filter((player) => !player.bot && !player.forfeited);
+    const now = Date.now();
+    const record: TableRecord = {
+      id: randomUUID(),
+      code: await this.allocateCode(),
+      gameId: table.gameId,
+      gameVersion: table.gameVersion,
+      hostId: user.id,
+      status: 'lobby',
+      players: humans.map((player, seat) => ({
+        id: player.id,
+        name: player.name,
+        seat,
+        bot: false,
+      })),
+      maxPlayers: table.maxPlayers,
+      options: table.options,
+      state: null,
+      seq: 0,
+      log: [],
+      deadlineAt: null,
+      createdAt: now,
+      startedAt: null,
+      finishedAt: null,
+      result: null,
+    };
+
+    await this.store.createTable(record);
+    return record.id;
   }
 
   async startTable(tableId: string, userId: string): Promise<void> {
@@ -352,11 +554,26 @@ export class TableService {
 
     const chat = await this.store.listChat(table.id, 30);
 
+    // 只有"这一版写了更新公告、而你还不知道"才查一次库；
+    // 没写 notes 的游戏（大多数）零开销
+    const notes = runtime.manifest.notes ?? [];
+    const notice =
+      notes.length > 0 &&
+      !(await this.store.hasAckedVersion(viewerId, table.gameId, table.gameVersion))
+        ? {
+            gameId: table.gameId,
+            gameName: runtime.manifest.name,
+            version: table.gameVersion,
+            notes,
+          }
+        : null;
+
     return {
       tableId: table.id,
       gameId: table.gameId,
       gameName: runtime.manifest.name,
       gameVersion: table.gameVersion,
+      code: table.code,
       status: table.status,
       seq: table.seq,
       hostId: table.hostId,
@@ -373,28 +590,43 @@ export class TableService {
       log: table.log.filter((entry) => entry.to === 'all' || entry.to.includes(viewerId)).slice(-80),
       chat,
       viewers: this.presence.viewers(table.id),
+      notice,
+    };
+  }
+
+  /** 我参与的、还没结束的桌（首页「我的对局」） */
+  async listMine(userId: string): Promise<TableSummary[]> {
+    const tables = await this.store.listMyTables(userId, 20);
+    return tables.map((table) => this.toSummary(table, userId));
+  }
+
+  private toSummary(table: TableRecord, viewerId?: string): TableSummary {
+    const gameName =
+      this.host.get(table.gameId, table.gameVersion)?.manifest.name ??
+      this.host.activeFor(table.gameId)?.manifest.name ??
+      table.gameId;
+    const host = table.players.find((player) => player.id === table.hostId);
+    const seated = viewerId ? table.players.find((player) => player.id === viewerId) : undefined;
+
+    return {
+      id: table.id,
+      gameId: table.gameId,
+      gameName,
+      code: table.code,
+      status: table.status,
+      players: table.players.length,
+      maxPlayers: table.maxPlayers,
+      hostName: host?.name ?? '—',
+      createdAt: table.createdAt,
+      ...(viewerId
+        ? { mine: seated ? (seated.id === table.hostId ? ('host' as const) : ('player' as const)) : ('spectator' as const) }
+        : {}),
     };
   }
 
   async summaries(): Promise<TableSummary[]> {
     const tables = await this.store.listTables();
-    return tables.map((table) => {
-      const gameName =
-        this.host.get(table.gameId, table.gameVersion)?.manifest.name ??
-        this.host.activeFor(table.gameId)?.manifest.name ??
-        table.gameId;
-      const host = table.players.find((player) => player.id === table.hostId);
-      return {
-        id: table.id,
-        gameId: table.gameId,
-        gameName,
-        status: table.status,
-        players: table.players.length,
-        maxPlayers: table.maxPlayers,
-        hostName: host?.name ?? '—',
-        createdAt: table.createdAt,
-      };
-    });
+    return tables.map((table) => this.toSummary(table));
   }
 
   /* ---------------------------------------------------------------- */
@@ -433,18 +665,32 @@ export class TableService {
       throw new ServiceError('no_replay', '建局记录不完整，无法回放');
     }
 
-    let state = (
-      await runtime.createState({
-        players: setup.players,
-        options: setup.options ?? {},
-        seed: setup.seed,
-        now: 0,
-      })
-    ).state;
+    // 步数超过上限时，从最近的快照起算：回放"最后一段"，
+    // 总比永远卡在第 400 步、看不到结局强。快照只存库，下发的仍然是观战者视角。
+    const total = rows.length;
+    const fromSeq = total > MAX_REPLAY_STEPS ? rows[total - MAX_REPLAY_STEPS]!.seq : start.seq;
+    const snapshot = fromSeq > start.seq ? await this.store.latestSnapshot(table.id, fromSeq) : undefined;
+
+    let state: unknown;
+    let cursor: number;
+    if (snapshot) {
+      state = snapshot.state;
+      cursor = snapshot.seq;
+    } else {
+      state = (
+        await runtime.createState({
+          players: setup.players,
+          options: setup.options ?? {},
+          seed: setup.seed,
+          now: 0,
+        })
+      ).state;
+      cursor = start.seq;
+    }
 
     const steps: ReplayStep[] = [];
     const logs: LogEntry[] = [];
-    let truncated = false;
+    let truncated = fromSeq > start.seq;
 
     const pushStep = async (seq: number, kind: string, actor: string | null): Promise<void> => {
       const described = await runtime.describe(state, 'spectator');
@@ -458,9 +704,11 @@ export class TableService {
       });
     };
 
-    await pushStep(start.seq, 'start', start.actor);
+    const anchor = rows.find((row) => row.seq === cursor);
+    await pushStep(cursor, anchor?.kind ?? 'start', anchor?.actor ?? null);
 
     for (const row of rows) {
+      if (row.seq <= cursor) continue;
       if (row.kind === 'start') continue;
       if (steps.length >= MAX_REPLAY_STEPS) {
         truncated = true;
@@ -509,7 +757,8 @@ export class TableService {
 
   /** 一局结束写一次战绩 + 更新 Elo；saveMatchResults 幂等，重复调用不会重复计分 */
   private async recordResult(table: TableRecord): Promise<void> {
-    const ranking = table.state?.ranking;
+    // 认负这类平台算出来的结果优先：插件在中途根本没跑过结算
+    const ranking = table.result?.ranking ?? table.state?.ranking;
     if (!ranking || ranking.length === 0) return;
 
     const humans = table.players.filter((player) => !player.bot);

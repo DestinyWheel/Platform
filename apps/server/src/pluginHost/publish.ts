@@ -9,16 +9,22 @@ import type { PluginHost } from './host.js';
 import { smokePlugin } from './smoke.js';
 import { assertApiCompatible, PluginError, type GameVersionRecord } from './types.js';
 
-const manifestSchema = z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,31}$/, 'id 只能用小写字母/数字/连字符'),
-  name: z.string().min(1),
-  version: z.string().regex(/^\d+\.\d+\.\d+$/, 'version 必须是 semver，如 1.0.0'),
-  apiVersion: z.string().min(1),
-  players: z.object({ min: z.number().int().min(1), max: z.number().int().min(1) }),
-  modes: z.array(z.enum(['realtime', 'turnbased'])).min(1),
-  tags: z.array(z.string()).default([]),
-  estimatedMinutes: z.number().int().min(1).max(600),
-});
+const manifestSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9][a-z0-9-]{1,31}$/, 'id 只能用小写字母/数字/连字符'),
+    name: z.string().min(1),
+    version: z.string().regex(/^\d+\.\d+\.\d+$/, 'version 必须是 semver，如 1.0.0'),
+    apiVersion: z.string().min(1),
+    players: z.object({ min: z.number().int().min(1), max: z.number().int().min(1) }),
+    modes: z.array(z.enum(['realtime', 'turnbased'])).min(1),
+    tags: z.array(z.string()).default([]),
+    estimatedMinutes: z.number().int().min(1).max(600),
+    /** 更新公告：玩家第一次进到跑这一版的桌时要读一次 */
+    notes: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
+  })
+  .refine((manifest) => manifest.players.max >= manifest.players.min, {
+    message: 'players.max 不能小于 players.min',
+  });
 
 export interface PublishDeps {
   store: Store;

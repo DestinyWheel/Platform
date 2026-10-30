@@ -87,6 +87,21 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  // 邀请链接 #/join/ABC234：拿到码就直接进桌（开打了就是观战）
+  const joinOnce = useRef(false);
+  useEffect(() => {
+    const match = /^#\/join\/([A-Za-z0-9]{4,8})$/.exec(location.hash);
+    if (!match?.[1] || !session || joinOnce.current) return;
+
+    joinOnce.current = true;
+    const code = match[1];
+    api
+      .joinByCode(code)
+      .then(({ id }) => navigate({ name: 'table', id }))
+      .catch(() => navigate({ name: 'lobby' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
   const navigate = (next: View): void => {
     writeHash(next);
     setView(next);
@@ -120,6 +135,7 @@ export function App() {
         tableId={view.id}
         session={session}
         onExit={() => navigate({ name: 'lobby' })}
+        onOpen={(id) => navigate({ name: 'table', id })}
         onReplay={(id) => navigate({ name: 'replay', id })}
       />
     );

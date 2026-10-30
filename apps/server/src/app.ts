@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -23,6 +24,50 @@ import { Presence } from './presence.js';
 import { registerWebSocket } from './ws.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+
+/** 备份保留份数：超过就删最旧的，免得盘被慢慢吃满 */
+const BACKUP_KEEP = Math.max(1, Number(process.env.BACKUP_KEEP ?? 14) || 14);
+
+interface BackupEntry {
+  name: string;
+  bytes: number;
+  createdAt: number;
+}
+
+async function listBackups(dir: string): Promise<BackupEntry[]> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return [];
+  }
+
+  const entries: BackupEntry[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json.gz')) continue;
+    try {
+      const info = await stat(path.join(dir, name));
+      entries.push({ name, bytes: info.size, createdAt: info.mtimeMs });
+    } catch {
+      // 刚好被别的进程删掉，跳过
+    }
+  }
+  return entries.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+async function pruneBackups(dir: string): Promise<string[]> {
+  const stale = (await listBackups(dir)).slice(BACKUP_KEEP);
+  const removed: string[] = [];
+  for (const entry of stale) {
+    try {
+      await unlink(path.join(dir, entry.name));
+      removed.push(entry.name);
+    } catch {
+      // 删不掉就留着，下次再试，不能因为清理失败让备份本身失败
+    }
+  }
+  return removed;
+}
 
 /**
  * 昵称就是登录名，所以长度和字符要收一收：
@@ -67,6 +112,8 @@ export interface AppOptions {
   db?: Db;
   /** 插件产物目录；默认 <repo>/storage/plugins */
   storageRoot?: string;
+  /** 前端构建产物目录；默认 <repo>/apps/web/dist，存在就直接由本进程托管 */
+  webRoot?: string;
   /** 启动时把 games/ 下的源码发一遍（开发用）；默认开，设 AUTO_PUBLISH_GAMES=0 关 */
   autoPublish?: boolean;
 }
@@ -153,6 +200,37 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     },
   });
 
+  /* ---------------------- 前端产物静态托管 ---------------------- */
+  // 有就托管，没有就通知运维去 build，仅此而已。
+  // 注意：API / WS / 插件产物不参与回落，否则打错的接口路径会返回 index.html，
+  // 客户端拿到一坨 HTML 去 JSON.parse，报错会离谱到查不出原因。
+  const webRoot = path.resolve(
+    options.webRoot ?? process.env.WEB_DIR ?? path.join(REPO_ROOT, 'apps', 'web', 'dist'),
+  );
+  const indexFile = path.join(webRoot, 'index.html');
+  if (existsSync(indexFile)) {
+    const indexHtml = await readFile(indexFile, 'utf8');
+    await app.register(fastifyStatic, {
+      root: webRoot,
+      prefix: '/',
+      decorateReply: false,
+      maxAge: '1h',
+    });
+
+    app.setNotFoundHandler((request, reply) => {
+      const url = request.url;
+      if (url.startsWith('/api') || url.startsWith('/ws') || url.startsWith('/plugins')) {
+        return reply.code(404).send({ code: 'not_found', message: '接口不存在' });
+      }
+      // 前端是 hash 路由，任何非静态路径都回 index.html
+      return reply.type('text/html; charset=utf-8').send(indexHtml);
+    });
+  } else {
+    app.log.warn(
+      `前端产物不存在（${indexFile}），只提供 API。开发时用 pnpm dev，上线前先跑 pnpm build`,
+    );
+  }
+
   const requireUser = async (request: FastifyRequest): Promise<UserRecord> => {
     const auth = verifyToken(bearerFrom(request.headers.authorization));
     if (!auth) throw new ServiceError('unauthorized', '请先登录');
@@ -201,7 +279,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     });
   });
 
-  /** 备份：整库导出成 gzip JSON，落到 storage/backups/ */
+  /** 备份：整库导出成 gzip JSON，落到 storage/backups/；只保留最近 N 份 */
   app.post('/api/admin/backup', async (request) => {
     await requireAdmin(request);
     const dump = await store.exportAll();
@@ -214,11 +292,26 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const buffer = gzipSync(Buffer.from(JSON.stringify(payload), 'utf8'));
     await writeFile(file, buffer);
 
+    const pruned = await pruneBackups(backupDir);
+
     metrics.inc('backup.created');
     return {
       file,
       bytes: buffer.length,
+      pruned,
       counts: Object.fromEntries(Object.entries(dump).map(([table, rows]) => [table, rows.length])),
+    };
+  });
+
+  /** 备份列表（管理后台展示用），顺带告诉运维总共占了多少盘 */
+  app.get('/api/admin/backups', async (request) => {
+    await requireAdmin(request);
+    const backupDir = path.join(path.dirname(storageRoot), 'backups');
+    const files = await listBackups(backupDir);
+    return {
+      keep: BACKUP_KEEP,
+      bytes: files.reduce((sum, entry) => sum + entry.bytes, 0),
+      files: files.map(({ name, bytes, createdAt }) => ({ name, bytes, createdAt })),
     };
   });
 
@@ -359,9 +452,25 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     return { user: publicUser(user) };
   });
 
+  /** 版本公告已读：一个人对（游戏, 版本）只会读一次 */
+  app.post('/api/notices/ack', async (request) => {
+    const user = await requireUser(request);
+    const input = z
+      .object({ gameId: z.string().min(1), version: z.string().min(1) })
+      .parse(request.body);
+    await store.ackVersion(user.id, input.gameId, input.version);
+    return { ok: true };
+  });
+
   app.get('/api/games', async () => ({ games: host.listActive() }));
 
   app.get('/api/tables', async () => ({ tables: await service.summaries() }));
+
+  /** 首页的「我的对局」：我参与的、还没结束的桌 */
+  app.get('/api/tables/mine', async (request) => {
+    const user = await requireUser(request);
+    return { tables: await service.listMine(user.id) };
+  });
 
   app.post('/api/tables', async (request) => {
     const user = await requireUser(request);
@@ -370,6 +479,24 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const id = await service.createTable(user, input);
     metrics.inc('tables.created');
     request.log.info({ userId: user.id, tableId: id, gameId: input.gameId }, '建桌');
+    return { id };
+  });
+
+  /** 随机加入：没桌就现开一张，所以一定会给你一个牌桌 */
+  app.post<{ Body: { gameId?: string } }>('/api/tables/quick-match', async (request) => {
+    const user = await requireUser(request);
+    checkLimit(limits.createTable.take(user.id));
+    const gameId = typeof request.body?.gameId === 'string' ? request.body.gameId : undefined;
+    const result = await service.quickMatch(user, gameId);
+    metrics.inc(result.created ? 'tables.created' : 'tables.quick_matched');
+    return result;
+  });
+
+  app.post<{ Body: { code?: string } }>('/api/tables/join-by-code', async (request) => {
+    const user = await requireUser(request);
+    checkLimit(limits.createTable.take(user.id));
+    const code = String(request.body?.code ?? '').trim();
+    const id = await service.joinByCode(code, user);
     return { id };
   });
 
@@ -390,6 +517,33 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     metrics.inc('tables.started');
     request.log.info({ userId: user.id, tableId: request.params.id }, '开局');
     return { ok: true };
+  });
+
+  /** 未开局时离开（房主走了会把房主交给下一个人） */
+  app.post<{ Params: { id: string } }>('/api/tables/:id/leave', async (request) => {
+    const user = await requireUser(request);
+    await service.leave(request.params.id, user.id);
+    metrics.inc('tables.left');
+    return { ok: true };
+  });
+
+  /** 已开局时退出 = 认负：这一局立刻结束，判负方算法照算 */
+  app.post<{ Params: { id: string } }>('/api/tables/:id/forfeit', async (request) => {
+    const user = await requireUser(request);
+    await service.forfeit(request.params.id, user.id);
+    metrics.inc('tables.forfeited');
+    request.log.info({ userId: user.id, tableId: request.params.id }, '认负');
+    return { ok: true };
+  });
+
+  /** 再来一局：原班人马、**原版本**、原设置，开一张新桌 */
+  app.post<{ Params: { id: string } }>('/api/tables/:id/rematch', async (request) => {
+    const user = await requireUser(request);
+    checkLimit(limits.createTable.take(user.id));
+    const id = await service.rematch(request.params.id, user);
+    metrics.inc('tables.created');
+    request.log.info({ userId: user.id, from: request.params.id, to: id }, '再来一局');
+    return { id };
   });
 
   app.get<{ Params: { id: string } }>('/api/tables/:id/replay', async (request) => {

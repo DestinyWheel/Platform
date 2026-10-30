@@ -138,7 +138,7 @@ async function rollOnce(clients, tableId) {
 }
 
 /** 把 games/dice 复制一份、改版本号、打成 zip，模拟一次后台上传 */
-function buildPackage(version) {
+function buildPackage(version, notes = null) {
   const dir = path.join(pkgDir, `dice-${version}`);
   mkdirSync(dir, { recursive: true });
   // 不带 node_modules：插件包里本来就不该有依赖目录（依赖由宿主解析），
@@ -151,6 +151,7 @@ function buildPackage(version) {
   const manifestPath = path.join(dir, 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.version = version;
+  if (notes) manifest.notes = notes;
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
   const zip = new AdmZip();
@@ -405,11 +406,16 @@ const board = await api2('/leaderboard?gameId=dice', { token: alice.token });
 assert.equal(board.entries.length, 2, '两人都应有评分');
 const totalRating = board.entries.reduce((sum, entry) => sum + entry.rating, 0);
 assert.equal(totalRating, 3000, 'Elo 零和：两人总分应仍是 2 × 1500');
-assert.ok(board.entries[0].rating > 1500, '赢家应该涨分');
-assert.ok(board.entries[1].rating < 1500, '输家应该掉分');
-console.log(
-  `✓ Elo：${board.entries[0].name} ${board.entries[0].rating} / ${board.entries[1].name} ${board.entries[1].rating}（总分守恒）`,
-);
+// 骰子是按点数分胜负的，运气好时可能并列第一；并列就双方都不动分
+if (board.entries[0].rating === board.entries[1].rating) {
+  console.log(`✓ Elo：本局平局，双方都停在 ${board.entries[0].rating}（总分守恒）`);
+} else {
+  assert.ok(board.entries[0].rating > 1500, '赢家应该涨分');
+  assert.ok(board.entries[1].rating < 1500, '输家应该掉分');
+  console.log(
+    `✓ Elo：${board.entries[0].name} ${board.entries[0].rating} / ${board.entries[1].name} ${board.entries[1].rating}（总分守恒）`,
+  );
+}
 
 const replayRes = await api2(`/tables/${tableA}/replay`, { token: alice.token });
 const replay = replayRes.replay;
@@ -970,6 +976,161 @@ const adminBackup = await api2('/admin/backup', { token: alice.token, method: 'P
 assert.ok(adminBackup.bytes > 0, '备份文件不应为空');
 assert.ok(adminBackup.counts.users >= 4, '备份应包含用户表');
 console.log(`✓ 一键备份：${Object.keys(adminBackup.counts).length} 张表，${(adminBackup.bytes / 1024).toFixed(1)} KB`);
+
+/* ------------------------------ 房间号 / 认负 / 再来一局 ------------------------------ */
+
+console.log('\n▶ 阶段十三：房间号 / 随机加入 / 离开 / 认负 / 再来一局 / 版本公告');
+
+// 先发一版带更新公告的插件
+const NOTES = ['结算顺序调整：先手玩家优先选牌。', '修复撤销后手牌没有归位的问题。'];
+const noted = await api2('/admin/plugins', {
+  token: alice.token,
+  method: 'POST',
+  raw: buildPackage('0.2.3', NOTES),
+});
+assert.equal(noted.version, '0.2.3');
+
+const { id: roomTable } = await createTableWithRetry(api2, alice.token, {
+  gameId: 'dice',
+  maxPlayers: 99,
+});
+const roomSnap = await api2(`/tables/${roomTable}`, { token: alice.token });
+assert.equal(roomSnap.snapshot.gameVersion, '0.2.3', '新桌应该用最新版');
+assert.equal(roomSnap.snapshot.maxPlayers, 4, '超过上限的座位数应被钳到游戏声明的 4');
+const roomCode = roomSnap.snapshot.code;
+assert.ok(/^[A-Z0-9]{6}$/.test(roomCode ?? ''), `房间号应是 6 位，实际 ${roomCode}`);
+console.log(`✓ 新桌拿到 6 位房间号 ${roomCode}，座位数被钳到 4`);
+
+assert.ok(roomSnap.snapshot.notice, '第一次进这个版本应该弹公告');
+assert.equal(roomSnap.snapshot.notice.notes.length, NOTES.length);
+assert.equal(roomSnap.snapshot.notice.version, '0.2.3');
+console.log('✓ 没读过的版本会带出更新公告');
+
+await api2('/notices/ack', {
+  token: alice.token,
+  method: 'POST',
+  body: { gameId: 'dice', version: '0.2.3' },
+});
+const afterAck = await api2(`/tables/${roomTable}`, { token: alice.token });
+assert.equal(afterAck.snapshot.notice, null, '读过的版本不应再弹');
+console.log('✓ 「我知道了」之后同一版本不再弹');
+
+// 房间号不区分大小写——念出来的东西不该逼人回忆大小写
+const joined = await api2('/tables/join-by-code', {
+  token: bob.token,
+  method: 'POST',
+  body: { code: roomCode.toLowerCase() },
+});
+assert.equal(joined.id, roomTable);
+const bobSees = await api2(`/tables/${roomTable}`, { token: bob.token });
+assert.equal(bobSees.snapshot.players.length, 2);
+assert.ok(bobSees.snapshot.notice, 'bob 也还没读过这一版');
+await api2('/notices/ack', {
+  token: bob.token,
+  method: 'POST',
+  body: { gameId: 'dice', version: '0.2.3' },
+});
+console.log('✓ 按房间号加入（大小写不敏感），新玩家各弹一次公告');
+
+await expectFailure(
+  api2('/tables/join-by-code', { token: bob.token, method: 'POST', body: { code: 'ZZZZZZ' } }),
+  400,
+  'no_such_room',
+  '加入不存在的房间号',
+);
+
+const mineForBob = await api2('/tables/mine', { token: bob.token });
+assert.ok(
+  mineForBob.tables.some((table) => table.id === roomTable),
+  '「我的对局」里应该有这张桌',
+);
+assert.equal(
+  mineForBob.tables.find((table) => table.id === roomTable).code,
+  roomCode,
+  '「我的对局」要带上房间号',
+);
+console.log('✓ 「我的对局」能找回进行中的桌（含房间号）');
+
+// 离开：未开局时座位释放
+await api2(`/tables/${roomTable}/leave`, { token: bob.token, method: 'POST' });
+const afterLeave = await api2(`/tables/${roomTable}`, { token: alice.token });
+assert.equal(afterLeave.snapshot.players.length, 1, '离开后应该少一个座位');
+console.log('✓ 未开局时离开，座位释放');
+
+// 房主离开 → 房主顺位转移
+const { id: hostTable } = await createTableWithRetry(api2, alice.token, { gameId: 'dice' });
+await api2('/tables/join-by-code', {
+  token: bob.token,
+  method: 'POST',
+  body: { code: (await api2(`/tables/${hostTable}`, { token: alice.token })).snapshot.code },
+});
+await api2(`/tables/${hostTable}/leave`, { token: alice.token, method: 'POST' });
+const afterHostLeave = await api2(`/tables/${hostTable}`, { token: bob.token });
+assert.equal(afterHostLeave.snapshot.hostId, bob.user.id, '房主走了，房主应该交给下一个人');
+assert.equal(afterHostLeave.snapshot.you.isHost, true);
+console.log('✓ 房主离开后，房主顺位交给下一个人');
+
+// 再加回房间桌并开局，然后认负
+await api2('/tables/join-by-code', {
+  token: bob.token,
+  method: 'POST',
+  body: { code: roomCode },
+});
+await api2(`/tables/${roomTable}/start`, { token: alice.token, method: 'POST' });
+const startedSnap = await api2(`/tables/${roomTable}`, { token: bob.token });
+assert.equal(startedSnap.snapshot.status, 'playing');
+
+await api2(`/tables/${roomTable}/forfeit`, { token: alice.token, method: 'POST' });
+const forfeited = await api2(`/tables/${roomTable}`, { token: bob.token });
+assert.equal(forfeited.snapshot.status, 'finished', '认负后对局应立即结束');
+
+const forfeitRows = await db2.query(
+  'SELECT user_id, rank, is_win FROM match_results WHERE table_id = $1 ORDER BY rank',
+  [roomTable],
+);
+assert.equal(forfeitRows.length, 2, '认负也要落战绩');
+assert.equal(forfeitRows[0].user_id, bob.user.id, '没认负的人第一');
+assert.equal(forfeitRows[0].is_win, true);
+assert.equal(forfeitRows[1].user_id, alice.user.id, '认负的人排最后');
+assert.equal(forfeitRows[1].is_win, false);
+console.log('✓ 认负：对局立刻结束，认负者判负，战绩和 Elo 照常记');
+
+// 再来一局：版本必须跟原桌一致
+const { id: nextTable } = await api2(`/tables/${roomTable}/rematch`, {
+  token: bob.token,
+  method: 'POST',
+});
+const nextSnap = await api2(`/tables/${nextTable}`, { token: bob.token });
+assert.equal(nextSnap.snapshot.status, 'lobby');
+assert.equal(nextSnap.snapshot.gameVersion, '0.2.3', '再来一局必须沿用原桌版本');
+assert.equal(nextSnap.snapshot.players.length, 1, '认负退出的人不该被拉进下一局');
+assert.equal(nextSnap.snapshot.players[0].id, bob.user.id);
+assert.notEqual(nextSnap.snapshot.code, roomCode, '新桌要有新的房间号');
+console.log('✓ 再来一局：沿用原版本、不带认负退出的人，房间号是新的');
+
+// 随机加入：一定给你一张能坐的桌
+let quick = null;
+for (let attempt = 0; attempt < 5; attempt += 1) {
+  try {
+    quick = await api2('/tables/quick-match', {
+      token: bob.token,
+      method: 'POST',
+      body: { gameId: 'dice' },
+    });
+    break;
+  } catch (error) {
+    if (error.status !== 429) throw error;
+    await sleep(1200);
+  }
+}
+assert.ok(quick, '随机加入应该成功');
+const quickSnap = await api2(`/tables/${quick.id}`, { token: bob.token });
+assert.ok(
+  quickSnap.snapshot.players.some((player) => player.id === bob.user.id),
+  '随机加入之后必须在座位里',
+);
+assert.equal(quickSnap.snapshot.status, 'lobby');
+console.log(`✓ 随机加入：${quick.created ? '没有等人的桌，现开了一张' : '进了一张正在等人的桌'}`);
 
 /* ------------------------------ 收尾 ------------------------------ */
 

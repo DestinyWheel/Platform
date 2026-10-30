@@ -136,6 +136,36 @@ export const api = {
 
   joinTable: (id: string) => request<{ ok: true }>(`/tables/${id}/join`, { method: 'POST' }),
 
+  /** 我参与的、还没结束的桌 */
+  myTables: () => request<{ tables: TableSummary[] }>('/tables/mine'),
+
+  /** 随机加入：没桌就现开一张，所以一定会给你一个牌桌 */
+  quickMatch: (gameId?: string) =>
+    request<{ id: string; created: boolean }>('/tables/quick-match', {
+      method: 'POST',
+      body: JSON.stringify(gameId ? { gameId } : {}),
+    }),
+
+  joinByCode: (code: string) =>
+    request<{ id: string }>('/tables/join-by-code', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+
+  leaveTable: (id: string) => request<{ ok: true }>(`/tables/${id}/leave`, { method: 'POST' }),
+
+  /** 已开局时退出 = 认负 */
+  forfeitTable: (id: string) => request<{ ok: true }>(`/tables/${id}/forfeit`, { method: 'POST' }),
+
+  rematch: (id: string) => request<{ id: string }>(`/tables/${id}/rematch`, { method: 'POST' }),
+
+  /** 版本公告：读过了就不再弹 */
+  ackNotice: (gameId: string, version: string) =>
+    request<{ ok: true }>('/notices/ack', {
+      method: 'POST',
+      body: JSON.stringify({ gameId, version }),
+    }),
+
   startTable: (id: string) => request<{ ok: true }>(`/tables/${id}/start`, { method: 'POST' }),
 
   snapshot: (id: string) => request<{ snapshot: TableSnapshot }>(`/tables/${id}`),
@@ -189,7 +219,15 @@ export const api = {
     }),
 
   adminBackup: () =>
-    request<{ file: string; bytes: number; counts: Record<string, number> }>('/admin/backup', {
-      method: 'POST',
-    }),
+    request<{ file: string; bytes: number; pruned: string[]; counts: Record<string, number> }>(
+      '/admin/backup',
+      { method: 'POST' },
+    ),
+
+  adminBackups: () =>
+    request<{
+      keep: number;
+      bytes: number;
+      files: { name: string; bytes: number; createdAt: number }[];
+    }>('/admin/backups'),
 };

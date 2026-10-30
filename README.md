@@ -11,8 +11,12 @@ pnpm install
 pnpm dev          # 同时起 server(8787) + web(5173)
 ```
 
-打开 <http://127.0.0.1:5173>，注册一个账号（**第一个注册的人自动成为管理员**）。开一张桌，把地址复制到另一个浏览器（或无痕窗口），用另一个账号加入，房主点「开始游戏」。
+打开 <http://127.0.0.1:5173>，注册一个账号（**第一个注册的人自动成为管理员**）。
+首页就两件事：点「随便来一局」，或者把**房间号**（6 位，比如 `C32K25`）念给朋友。
 
+> 没有"房间列表"了。私人平台就几个人，列表毫无意义还会一直堆积——所以首页只有
+> 「随便来一局 / 房间号加入 / 我的对局」。
+>
 > 昵称就是登录名，密码用 scrypt 存。细节见 [docs/auth.md](docs/auth.md)。
 >
 > **数据库零配置**：默认用 PGlite（嵌入式 Postgres，WASM），数据落在 `.data/pg`。要连真 Postgres，设 `DATABASE_URL=postgres://user:pass@host/db` 即可，SQL 和迁移完全一样。
@@ -23,8 +27,9 @@ pnpm dev          # 同时起 server(8787) + web(5173)
 
 ```bash
 pnpm typecheck    # 全仓库类型检查
+pnpm test         # 单元测试（引擎 / Elo / 密码 / 令牌 / 哈希）
 pnpm build        # 构建前端到 apps/web/dist
-pnpm smoke        # 端到端：十二段，从注册登录到对局/人机/管理后台/限流/备份全跑一遍
+pnpm smoke        # 端到端：十三段，从注册登录到对局/人机/管理后台/限流/备份全跑一遍
 pnpm pack:game    # 把某个游戏打成 zip（用于后台上传）
 ```
 
@@ -50,8 +55,12 @@ games/
   dice/            示例插件：manifest + 服务端规则 + 原生 DOM 客户端
   mandala/         曼荼罗（移植自 D:\Workspace\gamer\Mandala 的 Lua 实现）
 scripts/
-  smoke.mjs        端到端验证
+  smoke.mjs        端到端验证（十三段）
   pack-game.mjs    打包插件
+tests/
+  unit.test.ts     单元测试（node --test + tsx，零额外依赖）
+.github/workflows/
+  ci.yml           typecheck + test + build + smoke
 ```
 
 **分层纪律**：`packages/engine` 不得 import 任何 DB / socket；插件不得碰 DB / socket / 全局随机 / 系统时钟。
@@ -67,12 +76,19 @@ scripts/
 
 | 能力 | 说明 |
 |---|---|
+| 房间号 | 每张桌一个 6 位码（去掉 0/O/1/I，念得清）。首页输码即可加入，邀请链接是 `#/join/CODE` |
+| 随机加入 | 「随便来一局」会塞进一张正在等人的桌；没有这样的桌就**直接给你开一张** |
+| 我的对局 | 首页列出你参与的未结束牌桌，关掉页面也能回来 |
+| 离开 / 认负 | 未开局可以离开（房主走了顺位转移）；已开局退出 = 认负，本局判负，战绩和 Elo 照常记 |
+| 再来一局 | 结束后一键开新桌：同一批人、**同一版本**、同样设置（认负退出的人不会被拉进来） |
+| 版本公告 | 插件 manifest 里写 `notes`，玩家第一次进到跑这一版的桌会强制读一次，每版只弹一次 |
 | 回放 | 一局结束后点「看回放」，按步拖动。服务端重放动作日志生成每步的观战者视角 |
 | 聊天 | 牌桌内实时聊天，落库持久化 |
 | 观战 | 不坐下也能看，顶栏显示当前有几个人在看 |
 | 战绩 | 大厅里的「我的战绩」：场次 / 胜场 / 胜率，附最近对局（可直接跳回放） |
 | Elo | 每人每个游戏一个分数，默认 1500，零和；开桌时 `ranked: false` 可打休闲局不计分 |
 | 人机 | 大厅勾选「补一个机器人」即可单人开局；机器人走和真人完全相同的动作通道，只是不产生战绩与 Elo |
+| 人数 | 游戏在 manifest 里声明 `players: {min,max}`，开桌时选座位数；只要够 `min` 人就能开，不用坐满 |
 
 ## 管理后台
 
@@ -92,11 +108,26 @@ scripts/
 |---|---|
 | 健康检查 | `GET /api/health` —— db 类型、uptime、内存、worker 数、各状态牌桌数 |
 | 指标 | `GET /api/metrics`（管理员）—— Prometheus 文本格式 |
-| 备份 | 管理后台「立即备份」，或 `POST /api/admin/backup` —— 整库导出到 `storage/backups/*.json.gz` |
+| 备份 | 管理后台「立即备份」，或 `POST /api/admin/backup` —— 整库导出到 `storage/backups/*.json.gz`，只保留最近 14 份（`BACKUP_KEEP`） |
 | 恢复 | `pnpm tsx scripts/restore.mjs <备份文件> [--data-dir <目录>]`（**破坏性**） |
 | 回收插件 | 管理后台「回收闲置 worker」，或 `POST /api/admin/plugins/gc` |
 
 限流默认全开：登录按 IP、建桌/上传按用户、聊天和动作按 WS 连接。超限返回 `429` + `retry-after`。
+
+## 部署
+
+服务端可以直接托管前端产物，所以**一个进程就够**：
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build                 # 产出 apps/web/dist
+pnpm --filter @platform/server start   # 或者 node_modules/.bin/tsx apps/server/src/main.ts
+```
+
+启动时如果 `apps/web/dist/index.html` 存在，就会挂在 `/`（其余非 `/api`、`/ws`、`/plugins` 的路径回落到 index.html）；
+不存在就只提供 API 并在日志里警告一句。
+
+需要配的环境变量见 [.env.example](.env.example)，**上线前至少改 `JWT_SECRET`**。
 
 细节见 [docs/m5.md](docs/m5.md)。
 

@@ -483,7 +483,17 @@ CREATE TABLE match_actions (
 `ver`，和 `users.token_version` 对不上就作废——改密码、退出登录都靠它立即生效。
 详见 [auth.md](./auth.md)。
 
-**快照**：每 50 步或每次进入 `global` 状态时把 `state` 存一份到 `match_snapshots`，回放从最近快照开始，避免千步重放。
+**房间码**：`tables.code` 是 6 位、去掉 0/O/1/I 的码，念得清、抄得对。首页不再有
+"房间列表"，只有「随便来一局 / 输房间号 / 我的对局」。
+
+**平台侧结算**：`tables.result` 存平台自己算出来的结果（认负、解散）。`recordResult()`
+优先读它，读不到才回落到插件状态里的 `ranking`——因为中途认负时插件根本没跑过结算。
+
+**快照**：每 50 步把 `state` 存一份到 `match_snapshots`（存的是**服务端状态**，含隐藏信息，
+只存库不下发）。回放超过 400 步时从最近的快照起算，至少能看到结局，而不是卡在第 400 步。
+
+**版本公告**：`version_acks(user_id, game_id, version)`。manifest 里写 `notes`，
+玩家第一次进到跑这一版的桌会强制读一次，每人对每个版本只记一条。
 
 ---
 

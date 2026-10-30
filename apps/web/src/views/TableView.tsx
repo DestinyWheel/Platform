@@ -11,15 +11,53 @@ const STATUS_LABEL = {
   finished: '已结束',
 } as const;
 
+/** 一个最小的确认弹窗：只在"会造成不可逆后果"的操作前出现 */
+function ConfirmDialog({
+  title,
+  body,
+  confirmLabel,
+  danger,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  danger?: boolean;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="backdrop" onClick={onCancel}>
+      <div className="dialog" onClick={(event) => event.stopPropagation()}>
+        <h2>{title}</h2>
+        <p className="muted small">{body}</p>
+        <div className="dialog-actions">
+          <button className="ghost" onClick={onCancel}>
+            取消
+          </button>
+          <button className={danger ? 'danger' : 'primary'} disabled={busy} onClick={onConfirm}>
+            {busy ? '处理中…' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function TableView({
   tableId,
   session,
   onExit,
+  onOpen,
   onReplay,
 }: {
   tableId: string;
   session: Session;
   onExit: () => void;
+  onOpen: (tableId: string) => void;
   onReplay: (tableId: string) => void;
 }) {
   const { snapshot, error, sendAction, sendChat } = useTableSocket(tableId, session.token);
@@ -32,6 +70,11 @@ export function TableView({
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState('');
+  const [confirming, setConfirming] = useState<'leave' | 'forfeit' | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  /** 已经点过"我知道了"的版本；服务端也会记，这里只是让弹窗立刻消失 */
+  const [ackedVersion, setAckedVersion] = useState<string | null>(null);
+
   const logRef = useRef<HTMLUListElement | null>(null);
   const chatRef = useRef<HTMLUListElement | null>(null);
 
@@ -70,15 +113,65 @@ export function TableView({
     }
   };
 
-  const copyInvite = async (): Promise<void> => {
-    const link = `${location.origin}${location.pathname}#/table/${tableId}`;
+  const leave = async (): Promise<void> => {
+    setBusy('leave');
+    setActionError(null);
     try {
-      await navigator.clipboard.writeText(link);
+      await api.leaveTable(tableId);
+      setConfirming(null);
+      onExit();
+    } catch (err) {
+      setActionError((err as Error).message);
+      setConfirming(null);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const forfeit = async (): Promise<void> => {
+    setBusy('forfeit');
+    setActionError(null);
+    try {
+      await api.forfeitTable(tableId);
+      setConfirming(null);
+    } catch (err) {
+      setActionError((err as Error).message);
+      setConfirming(null);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rematch = async (): Promise<void> => {
+    setBusy('rematch');
+    setActionError(null);
+    try {
+      const { id } = await api.rematch(tableId);
+      onOpen(id);
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const copyInvite = async (): Promise<void> => {
+    const target = snapshot?.code
+      ? `${location.origin}${location.pathname}#/join/${snapshot.code}`
+      : `${location.origin}${location.pathname}#/table/${tableId}`;
+    try {
+      await navigator.clipboard.writeText(target);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      setActionError(link);
+      setActionError(target);
     }
+  };
+
+  const acknowledge = async (): Promise<void> => {
+    if (!snapshot?.notice) return;
+    setAckedVersion(snapshot.notice.version);
+    await api.ackNotice(snapshot.notice.gameId, snapshot.notice.version).catch(() => undefined);
   };
 
   if (!snapshot) {
@@ -89,6 +182,7 @@ export function TableView({
   const canStart = snapshot.you.isHost && snapshot.players.length >= snapshot.minPlayers;
   const canJoin = !snapshot.you.isPlayer && snapshot.status === 'lobby';
   const message = actionError ?? error ?? clientError;
+  const notice = snapshot.notice && snapshot.notice.version !== ackedVersion ? snapshot.notice : null;
 
   return (
     <div className="table-page">
@@ -99,6 +193,7 @@ export function TableView({
         <div className="title">
           {snapshot.gameName}
           <span className="muted version">v{snapshot.gameVersion}</span>
+          {snapshot.code ? <span className="room-code">{snapshot.code}</span> : null}
         </div>
         <div className={`badge ${snapshot.status}`}>{STATUS_LABEL[snapshot.status]}</div>
         {remainingMs !== null ? (
@@ -108,9 +203,24 @@ export function TableView({
         ) : null}
         <div className="spacer" />
         <span className="muted small">👁 {snapshot.viewers}</span>
+        {snapshot.status === 'finished' && snapshot.you.isPlayer ? (
+          <button className="primary" disabled={busy === 'rematch'} onClick={() => void rematch()}>
+            {busy === 'rematch' ? '开桌中…' : '再来一局'}
+          </button>
+        ) : null}
         {snapshot.status === 'finished' ? (
           <button className="ghost" onClick={() => onReplay(tableId)}>
             看回放
+          </button>
+        ) : null}
+        {snapshot.you.isPlayer && snapshot.status === 'lobby' ? (
+          <button className="ghost" onClick={() => setConfirming('leave')}>
+            离开
+          </button>
+        ) : null}
+        {snapshot.you.isPlayer && snapshot.status === 'playing' ? (
+          <button className="ghost danger-text" onClick={() => setConfirming('forfeit')}>
+            退出
           </button>
         ) : null}
       </header>
@@ -129,6 +239,7 @@ export function TableView({
                   <span className="seat-name">{player.name}</span>
                   {player.bot ? <span className="tag">🤖</span> : null}
                   {player.id === snapshot.hostId ? <span className="tag">房主</span> : null}
+                  {player.forfeited ? <span className="tag">认负</span> : null}
                   {snapshot.activePlayer === player.id ? <span className="dot" /> : null}
                 </div>
               );
@@ -163,7 +274,11 @@ export function TableView({
                   {copied ? '已复制' : '复制邀请链接'}
                 </button>
               </div>
-              <div className="muted small">链接发给朋友，他们在同一个地址打开就能加入。</div>
+              <div className="muted small">
+                {snapshot.code
+                  ? `房间号 ${snapshot.code}：念给朋友，或者把链接发过去。`
+                  : '链接发给朋友，他们在同一个地址打开就能加入。'}
+              </div>
             </div>
           ) : (
             <GameSurface
@@ -228,6 +343,50 @@ export function TableView({
           </div>
         </aside>
       </div>
+
+      {confirming === 'leave' ? (
+        <ConfirmDialog
+          title="离开这张桌？"
+          body="还没开局，离开不会影响任何人。房主离开时，房主会顺位交给下一个人；如果只剩你一个，这张桌会关掉。"
+          confirmLabel="离开"
+          busy={busy === 'leave'}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void leave()}
+        />
+      ) : null}
+
+      {confirming === 'forfeit' ? (
+        <ConfirmDialog
+          title="退出并认负？"
+          body="这一局会立刻结束，你判负，对手获胜。退出算正常结束，战绩和 Elo 都会记录——中途离开不会被当成没事发生。"
+          confirmLabel="退出并认负"
+          danger
+          busy={busy === 'forfeit'}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void forfeit()}
+        />
+      ) : null}
+
+      {notice ? (
+        <div className="backdrop">
+          <div className="dialog">
+            <h2>
+              {notice.gameName} 更新到 v{notice.version}
+            </h2>
+            <ul className="notice-list">
+              {notice.notes.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+            <p className="muted small">这条公告每个版本只弹一次。</p>
+            <div className="dialog-actions">
+              <button className="primary" onClick={() => void acknowledge()}>
+                我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

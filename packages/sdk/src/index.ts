@@ -38,6 +38,13 @@ export interface GameManifest {
   modes: ('realtime' | 'turnbased')[];
   tags: string[];
   estimatedMinutes: number;
+  /**
+   * 这一版的更新内容（给人看的一两句话）。
+   *
+   * 玩家第一次进到跑这个版本的牌桌时会强制看一次——所以这里写的是
+   * "玩家需要知道的变化"，不是 changelog。
+   */
+  notes?: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -194,6 +201,8 @@ export interface TablePlayerInfo {
   name: string;
   seat: number;
   bot: boolean;
+  /** 中途认负：还在名单里，但这一局对他而言已经结束 */
+  forfeited?: boolean;
 }
 
 export interface ChatMessage {
@@ -258,6 +267,8 @@ export interface TableSnapshot {
   gameId: string;
   gameName: string;
   gameVersion: string;
+  /** 6 位房间码，念给朋友听的；老桌可能没有 */
+  code: string | null;
   status: TableStatus;
   seq: number;
   hostId: PlayerId;
@@ -279,17 +290,32 @@ export interface TableSnapshot {
   chat: ChatMessage[];
   /** 当前有多少人在看这张桌（含玩家） */
   viewers: number;
+  /**
+   * 这个版本有更新公告、而你还不知道 → 强制读一次（前端弹窗）。
+   * 已经读过、或者这一版没写 notes，就是 null。
+   */
+  notice: VersionNotice | null;
+}
+
+export interface VersionNotice {
+  gameId: string;
+  gameName: string;
+  version: string;
+  notes: string[];
 }
 
 export interface TableSummary {
   id: string;
   gameId: string;
   gameName: string;
+  code: string | null;
   status: TableStatus;
   players: number;
   maxPlayers: number;
   hostName: string;
   createdAt: number;
+  /** 我在这张桌里的角色，用于「我的对局」列表 */
+  mine?: 'host' | 'player' | 'spectator';
 }
 
 /* ---------------- 管理端（只有管理员能拿到） ---------------- */
