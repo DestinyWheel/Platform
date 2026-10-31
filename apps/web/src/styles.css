@@ -821,36 +821,93 @@ button.link:hover {
   text-decoration: underline;
 }
 
+.docs-page {
+  max-width: 900px;
+}
+
+.docs-card {
+  margin: 4px auto 0;
+  padding: 34px 40px 44px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(76, 141, 255, 0.07) 0%, transparent 46%),
+    linear-gradient(180deg, #171d27 0%, #131820 100%);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
+}
+
+@media (max-width: 720px) {
+  .docs-card {
+    padding: 22px 18px 30px;
+    border-radius: 12px;
+  }
+}
+
 .docs-body {
-  max-width: 72ch;
-  font-size: 14px;
-  line-height: 1.75;
+  max-width: none;
+  font-size: 14.5px;
+  line-height: 1.85;
   color: #c9d3df;
 }
 
-.docs-body p {
-  margin: 0 0 14px;
+.docs-body > p {
+  margin: 0 0 15px;
+}
+
+.docs-body > p:first-of-type {
+  font-size: 15px;
+  color: #dbe4ee;
 }
 
 .docs-h2 {
-  margin: 28px 0 12px;
-  font-size: 15px;
+  margin: 34px 0 14px;
+  padding-left: 12px;
+  border-left: 3px solid var(--accent);
+  font-size: 16px;
+  line-height: 1.5;
   color: var(--text);
   letter-spacing: 0;
   text-transform: none;
 }
 
-.docs-code {
-  margin: 0 0 16px;
-  padding: 14px 16px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
+.docs-body > .docs-h2:first-of-type {
+  margin-top: 10px;
+}
+
+.docs-inline {
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(76, 141, 255, 0.2);
+  background: rgba(76, 141, 255, 0.12);
+  color: #a8c6ff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12.5px;
-  line-height: 1.6;
+}
+
+.docs-code {
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid #212936;
+  background: #0b1016;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #c3d1e0;
   overflow-x: auto;
   white-space: pre;
+}
+
+.docs-body .intro-list {
+  margin: 0 0 16px;
+}
+
+.docs-body .intro-list li {
+  margin-bottom: 7px;
+}
+
+.docs-body .intro-list li:last-child {
+  margin-bottom: 0;
 }
 
 /* ---------------- 战绩 / 排行榜 ---------------- */

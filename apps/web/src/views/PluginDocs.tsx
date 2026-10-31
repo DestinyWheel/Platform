@@ -1,5 +1,31 @@
 import type { ReactElement } from 'react';
 
+/** 行内样式：`code` 变代码块，**粗** 变加粗 */
+function inline(text: string, key: string): (string | ReactElement)[] {
+  return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, index) => {
+    if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={`${key}-b${index}`}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+      return (
+        <code key={`${key}-c${index}`} className="docs-inline">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part;
+  });
+}
+
+/** 折行拼接：中文之间不留空格，其它情况留一个 */
+function joinLines(lines: string[]): string {
+  return lines.reduce((acc, line) => {
+    if (!acc) return line;
+    const cjk = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]$/u.test(acc);
+    return `${acc}${cjk ? '' : ' '}${line}`;
+  }, '');
+}
+
 /** 极简排版：空行分段、`## ` 小标题、`- ` 条目、``` 代码块 */
 function render(text: string): ReactElement[] {
   return text
@@ -22,23 +48,30 @@ function render(text: string): ReactElement[] {
           </h2>
         );
       }
+      // 一级标题和页头重复，直接丢掉
+      if (block.startsWith('# ')) return null;
       const lines = block.split('\n').map((line) => line.trim());
-      if (lines.every((line) => line.startsWith('- '))) {
+      // 条目可以折行：续行（不以「- 」开头）并回上一条
+      if (lines[0]?.startsWith('- ')) {
+        const items: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith('- ')) items.push(line.slice(2));
+          else if (items.length > 0) items[items.length - 1] = joinLines([items[items.length - 1]!, line]);
+        }
         return (
           <ul key={index} className="intro-list">
-            {lines.map((line, itemIndex) => (
-              <li key={itemIndex}>{line.slice(2)}</li>
+            {items.map((item, itemIndex) => (
+              <li key={itemIndex}>{inline(item, `l${itemIndex}`)}</li>
             ))}
           </ul>
         );
       }
-      return <p key={index}>{lines.join(' ')}</p>;
-    });
+      return <p key={index}>{inline(joinLines(lines), `p${index}`)}</p>;
+    })
+    .filter((node): node is ReactElement => node !== null);
 }
 
-const CONTENT = `# 插件开发文档
-
-一个游戏 = 一个插件目录，放进 \`games/\` 或者打成一个 zip 上传，**不需要重启服务器**。
+const CONTENT = `一个游戏 = 一个插件目录，放进 \`games/\` 或者打成一个 zip 上传，**不需要重启服务器**。
 
 ## 目录长什么样
 
@@ -124,7 +157,9 @@ export function PluginDocs({ onBack }: { onBack: () => void }) {
         </button>
         <div className="title">插件开发文档</div>
       </header>
-      <article className="docs-body">{render(CONTENT)}</article>
+      <div className="docs-card">
+        <article className="docs-body">{render(CONTENT)}</article>
+      </div>
     </div>
   );
 }
