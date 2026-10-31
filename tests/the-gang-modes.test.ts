@@ -126,6 +126,54 @@ test('纸牌帮：挑战卡真的改了规则', () => {
   assert.deepEqual(blackout.blackoutRounds, [1]);
 });
 
+test('纸牌帮：专家卡能真的用', () => {
+  const make = () => createInitialState(theGang, { ...SETUP, options: { mode: 'basic' } }).state;
+
+  // 打手：认领之后，同牌型时他更大
+  const muscle = make();
+  muscle.specialist = 10;
+  muscle.challenge = [];
+  dealHeist(muscle, () => 0.5);
+  const used = applyAction(
+    theGang,
+    muscle,
+    'b',
+    { type: 'useSpecialist', payload: {} },
+    1,
+  ).state;
+  assert.equal(used.muscle, 'b');
+  assert.equal(used.specialistUsed, true);
+
+  // 黑客：多抽一张，再弃一张
+  const hacker = make();
+  hacker.specialist = 5;
+  hacker.challenge = [];
+  dealHeist(hacker, () => 0.5);
+  const before = hacker.hands.a.length;
+  const afterUse = applyAction(theGang, hacker, 'a', { type: 'useSpecialist', payload: {} }, 1).state;
+  assert.equal(afterUse.hands.a.length, before + 1);
+  assert.equal(afterUse.pending?.player, 'a');
+  const afterDiscard = applyAction(theGang, afterUse, 'a', { type: 'discard', payload: { index: 0 } }, 1)
+    .state;
+  assert.equal(afterDiscard.hands.a.length, before);
+  assert.equal(afterDiscard.pending, null);
+
+  // 线人：把自己一张牌给指定的人看
+  const informant = make();
+  informant.specialist = 1;
+  informant.challenge = [];
+  dealHeist(informant, () => 0.5);
+  const shown = applyAction(
+    theGang,
+    informant,
+    'a',
+    { type: 'useSpecialist', payload: { target: 'c', card: 0 } },
+    1,
+  ).state;
+  assert.equal(shown.secrets.c.length, 1);
+  assert.equal(shown.secrets.b.length, 0);
+});
+
 test('纸牌帮：大师模式能打完，且两张挑战卡会轮换', () => {
   const start = createInitialState(theGang, { ...SETUP, options: { mode: 'master' } }).state;
   const first = [...start.challenge].sort((left, right) => left - right);

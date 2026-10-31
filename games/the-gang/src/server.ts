@@ -23,7 +23,7 @@ import type {
 } from '@platform/sdk';
 import rawManifest from '../manifest.json';
 import { type Card, cardLabel, categoryName, compareScores, evaluateWithBest, makeDeck, shuffle } from './poker';
-import { CHALLENGE, effectsOf, MODE_NAME, type ChallengeEffects, type GangMode } from './cards';
+import { CHALLENGE, effectsOf, MODE_NAME, SPECIALIST, type ChallengeEffects, type GangMode } from './cards';
 
 const manifest = rawManifest as GameManifest;
 
@@ -42,6 +42,8 @@ export interface HeistSeat {
   /** 摊牌时展示用的 5 张（7 选 5 里真正凑成牌型的那 5 张） */
   best: string[];
   hand: string[];
+  /** 打手：同牌型压别人 */
+  muscle?: boolean;
 }
 
 export interface HeistResult {
@@ -95,6 +97,17 @@ export interface GangState extends BaseState {
   blackoutRounds: number[];
   /** 动作感应器 / 激光绊网 这次让谁换了底牌（公开信息） */
   redrawPlayer: PlayerId | null;
+  /** 专家卡用没用、归谁（打手 / 老千这类要认领的） */
+  specialistUsed: boolean;
+  specialistOwner: PlayerId | null;
+  /** 公开信息：投资人 / 数学老师 / 老司机 / 主谋 报出来的东西 */
+  notes: { kind: string; player?: PlayerId; value?: number | string }[];
+  /** 只给某个人看的信息：线人看到的牌 */
+  secrets: Record<PlayerId, string[]>;
+  /** 黑客 / 老千：手上多了一张，等着弃 */
+  pending: { player: PlayerId; kind: 'hacker' | 'jack' } | null;
+  /** 打手：摊牌时同牌型压别人 */
+  muscle: PlayerId | null;
   guess: GuessState | null;
   guessOk: boolean | null;
 }
@@ -140,6 +153,70 @@ function nextActor(state: GangState): number {
   return notReady >= 0 ? notReady : 0;
 }
 
+/** 牌面点数：J/Q/K 算 10，A 算 11，万能 J 也算 10 */
+function cardValue(card: Card): number {
+  const rank = card.slice(0, -1).replace('10', 'T');
+  if (rank === 'A') return 11;
+  if (rank === 'J' || rank === 'Q' || rank === 'K') return 10;
+  return Number(rank);
+}
+
+/** 发完底牌就生效的专家卡（投资人 / 数学老师 / 女骗子 / 协调者） */
+function applyDealSpecialists(state: GangState, rng: () => number): void {
+  const card = state.specialist;
+  if (card == null) return;
+
+  if (card === 3) {
+    for (const player of state.players) {
+      const count = (state.hands[player] ?? []).filter((item) =>
+        ['J', 'Q', 'K'].includes(item.slice(0, -1)),
+      ).length;
+      state.notes.push({ kind: 'investor', player, value: count });
+    }
+    return;
+  }
+
+  if (card === 8) {
+    for (const player of state.players) {
+      const sum = (state.hands[player] ?? []).reduce((acc, item) => acc + cardValue(item), 0);
+      state.notes.push({ kind: 'math', player, value: sum });
+    }
+    return;
+  }
+
+  if (card === 9) {
+    const size = state.effects.pocketSize;
+    const pool = state.players.flatMap((player) => state.hands[player] ?? []);
+    const mixed = shuffle(pool, rng);
+    state.players.forEach((player, index) => {
+      state.hands[player] = mixed.slice(index * size, (index + 1) * size);
+    });
+    state.notes.push({ kind: 'conartist' });
+    return;
+  }
+
+  if (card === 6) {
+    // 简化：每人传出去的是点数最小的那张（手册里由本人决定）
+    const gifts = new Map<PlayerId, Card>();
+    for (const player of state.players) {
+      const hand = state.hands[player] ?? [];
+      if (hand.length === 0) continue;
+      let lowest = 0;
+      hand.forEach((item, index) => {
+        if (cardValue(item) < cardValue(hand[lowest]!)) lowest = index;
+      });
+      gifts.set(player, hand[lowest]!);
+      state.hands[player] = hand.filter((_, index) => index !== lowest);
+    }
+    state.players.forEach((player, index) => {
+      const left = state.players[(index + 1) % state.players.length]!;
+      const gift = gifts.get(left);
+      if (gift) state.hands[player] = [...(state.hands[player] ?? []), gift];
+    });
+    state.notes.push({ kind: 'coordinator' });
+  }
+}
+
 /** 发一次新的抢劫：洗牌、发底牌、清空公共牌和筹码 */
 export function dealHeist(state: GangState, rng: () => number): void {
   state.effects = effectsOf(state.challenge);
@@ -158,10 +235,17 @@ export function dealHeist(state: GangState, rng: () => number): void {
   state.last = null;
   state.blackoutRounds = [];
   state.redrawPlayer = null;
+  state.specialistUsed = false;
+  state.specialistOwner = null;
+  state.notes = [];
+  state.secrets = zeroed(state.players, []);
+  state.pending = null;
+  state.muscle = null;
   state.guess = null;
   state.guessOk = null;
 
   state.round = state.effects.skipFirst ? 2 : 1;
+  applyDealSpecialists(state, rng);
   if (state.effects.skipFirst) {
     for (let index = 0; index < 3; index += 1) {
       const card = state.deck.pop();
@@ -330,6 +414,94 @@ const submitGuess: ActionDef<GangState> = {
   },
 };
 
+/** 专家卡：一次性使用，效果按卡面来 */
+const useSpecialist: ActionDef<GangState> = {
+  allowedIn: ['draft'],
+  schema: z.object({
+    target: z.string().min(1).max(64).optional(),
+    card: z.number().int().min(0).max(5).optional(),
+    value: z.string().min(1).max(2).optional(),
+  }),
+  validate(state, action, ctx) {
+    if (state.specialist == null) return { ok: false, reason: 'specialist.none' };
+    if (state.specialistUsed) return { ok: false, reason: 'specialist.used' };
+    if (state.pending) return { ok: false, reason: 'specialist.busy' };
+    if (!state.players.includes(ctx.playerId)) return { ok: false, reason: 'not.in.table' };
+
+    const payload = action.payload as { target?: string; card?: number; value?: string };
+    const hand = state.hands[ctx.playerId] ?? [];
+
+    if (state.specialist === 1) {
+      if (!payload.target || !state.players.includes(payload.target)) {
+        return { ok: false, reason: 'specialist.target' };
+      }
+      if (payload.target === ctx.playerId) return { ok: false, reason: 'specialist.target' };
+      if (payload.card == null || payload.card >= hand.length) {
+        return { ok: false, reason: 'specialist.card' };
+      }
+    }
+    if (state.specialist === 4) {
+      if (!payload.value || !/^(2|3|4|5|6|7|8|9|10|J|Q|K|A)$/.test(payload.value)) {
+        return { ok: false, reason: 'specialist.value' };
+      }
+    }
+    return { ok: true };
+  },
+  reduce(state, action, ctx) {
+    const payload = action.payload as { target?: string; card?: number; value?: string };
+    const card = state.specialist!;
+    state.specialistUsed = true;
+    state.specialistOwner = ctx.playerId;
+
+    if (card === 1) {
+      const hand = state.hands[ctx.playerId] ?? [];
+      const shown = cardLabel(hand[payload.card!]!);
+      state.secrets[payload.target!] = [...(state.secrets[payload.target!] ?? []), shown];
+      state.notes.push({ kind: 'informant', player: ctx.playerId, value: payload.target });
+    } else if (card === 2) {
+      const { score } = evaluateWithBest([...(state.hands[ctx.playerId] ?? []), ...state.community]);
+      state.notes.push({ kind: 'driver', player: ctx.playerId, value: categoryName(score) });
+    } else if (card === 4) {
+      const want = String(payload.value).replace('10', 'T');
+      const count = (state.hands[ctx.playerId] ?? []).filter(
+        (item) => item.slice(0, -1).replace('10', 'T') === want,
+      ).length;
+      state.notes.push({ kind: 'mastermind', player: ctx.playerId, value: `${payload.value} × ${count}` });
+    } else if (card === 5 || card === 7) {
+      const drawn = card === 7 ? 'J*' : state.deck.pop()!;
+      state.hands[ctx.playerId] = [...(state.hands[ctx.playerId] ?? []), drawn];
+      state.pending = { player: ctx.playerId, kind: card === 7 ? 'jack' : 'hacker' };
+    } else if (card === 10) {
+      state.muscle = ctx.playerId;
+      state.notes.push({ kind: 'muscle', player: ctx.playerId });
+    }
+
+    ctx.emit({ type: 'log', key: 'thegang.specialist', args: { player: ctx.playerId, card } });
+  },
+};
+
+/** 黑客 / 老千多出来的那张牌，选一张弃掉 */
+const discardCard: ActionDef<GangState> = {
+  allowedIn: ['draft'],
+  schema: z.object({ index: z.number().int().min(0).max(6) }),
+  validate(state, action, ctx) {
+    if (!state.pending || state.pending.player !== ctx.playerId) {
+      return { ok: false, reason: 'specialist.pending' };
+    }
+    const { index } = action.payload as { index: number };
+    const hand = state.hands[ctx.playerId] ?? [];
+    if (index < 0 || index >= hand.length) return { ok: false, reason: 'specialist.card' };
+    return { ok: true };
+  },
+  reduce(state, action, ctx) {
+    const { index } = action.payload as { index: number };
+    const hand = state.hands[ctx.playerId] ?? [];
+    state.hands[ctx.playerId] = hand.filter((_, position) => position !== index);
+    state.pending = null;
+    ctx.emit({ type: 'log', key: 'thegang.discard', args: { player: ctx.playerId } });
+  },
+};
+
 const states: Record<string, StateDef<GangState>> = {
   /** 每轮同时抢筹码。activePlayer 只是用来复用平台的超时兜底，任何人都能随时动。 */
   draft: {
@@ -448,21 +620,30 @@ const states: Record<string, StateDef<GangState>> = {
 
       const seats: HeistSeat[] = [];
       let badAt: number | null = null;
-      let previous: number[] | null = null;
+      let previous: HeistSeat | null = null;
+
+      /** 打手：同牌型时他更大，其余照常比 */
+      const stronger = (left: HeistSeat, right: HeistSeat): number => {
+        const sameRank = (left.score[0] ?? 0) === (right.score[0] ?? 0);
+        if (sameRank && Boolean(left.muscle) !== Boolean(right.muscle)) return left.muscle ? 1 : -1;
+        return compareScores(left.score, right.score);
+      };
 
       for (const [index, player] of order.entries()) {
         const cards = [...(state.hands[player] ?? []), ...state.community];
         const { score, best } = evaluateWithBest(cards);
-        if (previous && compareScores(score, previous) < 0 && badAt === null) badAt = index;
-        seats.push({
+        const seat: HeistSeat = {
           player,
           chip: state.chips[player]?.[3] ?? 0,
           score,
           name: categoryName(score),
           hand: cards.map(cardLabel),
           best: best.map(cardLabel),
-        });
-        previous = score;
+          muscle: state.muscle === player,
+        };
+        if (previous && stronger(seat, previous) < 0 && badAt === null) badAt = index;
+        seats.push(seat);
+        previous = seat;
       }
 
       // 猜错了，就算顺序全对也算这次抢劫失败
@@ -652,6 +833,12 @@ const theGang: GamePlugin<GangState> = {
       effects: effectsOf([]),
       blackoutRounds: [],
       redrawPlayer: null,
+      specialistUsed: false,
+      specialistOwner: null,
+      notes: [],
+      secrets: zeroed(players, []),
+      pending: null,
+      muscle: null,
       guess: null,
       guessOk: null,
     };
@@ -687,6 +874,8 @@ const theGang: GamePlugin<GangState> = {
     confirm: confirmChip,
     advance,
     guess: submitGuess,
+    useSpecialist,
+    discard: discardCard,
   },
 
   view(state, viewer): PublicView {
@@ -729,6 +918,13 @@ const theGang: GamePlugin<GangState> = {
         challenge: state.challenge,
         challengeInfo: state.challenge.map((id) => ({ id, ...CHALLENGE[id]! })),
         specialist: state.specialist,
+        specialistInfo: state.specialist != null ? { id: state.specialist, ...SPECIALIST[state.specialist]! } : null,
+        specialistUsed: state.specialistUsed,
+        specialistOwner: state.specialistOwner,
+        notes: state.notes,
+        secrets: state.secrets[viewer as string] ?? [],
+        pending: state.pending ? { player: state.pending.player, kind: state.pending.kind } : null,
+        muscle: state.muscle,
         permanent: state.permanent,
         blackoutRounds: state.blackoutRounds,
         guess: state.guess

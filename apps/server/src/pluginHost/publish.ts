@@ -52,6 +52,8 @@ const manifestSchema = z
       )
       .max(4)
       .optional(),
+    /** 牌桌界面偏好 */
+    ui: z.object({ hideLog: z.boolean().optional() }).optional(),
   })
   .refine((manifest) => manifest.players.max >= manifest.players.min, {
     message: 'players.max 不能小于 players.min',

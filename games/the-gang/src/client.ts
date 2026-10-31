@@ -69,6 +69,71 @@ interface GangData {
   blackoutRounds: number[];
   guess: GuessInfo | null;
   guessOk: boolean | null;
+  specialistInfo: { id: number; name: string; text: string } | null;
+  specialistUsed: boolean;
+  specialistOwner: string | null;
+  notes: { kind: string; player?: string; value?: number | string }[];
+  secrets: string[];
+  pending: { player: string; kind: string } | null;
+  muscle: string | null;
+}
+
+const RANKS_ORDER = [
+  ['皇家同花顺', '10-A 同花'],
+  ['同花顺', '连号同花'],
+  ['四条', '四张同点'],
+  ['葫芦', '三条 + 一对'],
+  ['同花', '五张同花'],
+  ['顺子', '五张连号'],
+  ['三条', '三张同点'],
+  ['两对', '两组对子'],
+  ['一对', '两张同点'],
+  ['高牌', '什么都没有'],
+];
+
+function renderRail(data: GangData): string {
+  const ranks = RANKS_ORDER.map(
+    ([name, hint], index) =>
+      `<li><span>${index + 1}. ${name}</span><span>${hint}</span></li>`,
+  ).join('');
+
+  const notes = (data.notes ?? []).map((note) => `<div class="gang-note">${noteText(note)}</div>`).join('');
+  const secrets = (data.secrets ?? [])
+    .map((card) => `<div class="gang-secret">线人给你看的牌：${card}</div>`)
+    .join('');
+
+  return `
+    <aside class="gang-rail">
+      <div class="gang-rank">
+        <h4>牌型顺序</h4>
+        <ul class="gang-rank-list">${ranks}</ul>
+      </div>
+      ${notes || secrets ? `<div class="gang-notes"><h4>牌桌信息</h4>${notes}${secrets}</div>` : ''}
+    </aside>`;
+}
+
+function noteText(note: GangData['notes'][number]): string {
+  const who = note.player ? nameOf(note.player) : '';
+  switch (note.kind) {
+    case 'investor':
+      return `投资人 · ${who}：${note.value} 张人头牌`;
+    case 'math':
+      return `数学老师 · ${who}：点数合计 ${note.value}`;
+    case 'informant':
+      return `线人 · ${who} 给 ${nameOf(String(note.value))} 看了一张底牌`;
+    case 'driver':
+      return `老司机 · ${who}：现在的牌型是 ${note.value}`;
+    case 'mastermind':
+      return `主谋 · ${who}：${note.value}`;
+    case 'muscle':
+      return `打手 · ${who}：同牌型时他更大`;
+    case 'conartist':
+      return '女骗子：底牌全部混洗后重新发过';
+    case 'coordinator':
+      return '协调者：每人把一张底牌传给了左手边';
+    default:
+      return `${who} ${note.value ?? ''}`.trim();
+  }
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -88,13 +153,43 @@ const VALUE_CHOICES = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', '
 
 const CSS = `
 .gang {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 208px;
   gap: 14px;
+  align-items: start;
   padding: 4px 0 8px;
   color: #e6edf3;
   font-size: 14px;
 }
+.gang-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.gang-rail { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 12px; }
+@media (max-width: 1080px) {
+  .gang { grid-template-columns: minmax(0, 1fr); }
+  .gang-rail { position: static; }
+  .gang-rank-list { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+}
+.gang-rank {
+  border: 1px solid #262d38;
+  border-radius: 12px;
+  background: rgba(22, 27, 34, 0.72);
+  padding: 10px 12px;
+}
+.gang-rank h4 { margin: 0 0 8px; font-size: 12px; color: #8b98a7; font-weight: 600; letter-spacing: 0.05em; }
+.gang-rank-list { display: flex; flex-direction: column; gap: 3px; }
+.gang-rank-list li { display: flex; justify-content: space-between; font-size: 12.5px; color: #c9d3df; }
+.gang-rank-list li span:last-child { color: #8b98a7; font-size: 11px; }
+.gang-notes {
+  border: 1px solid #262d38;
+  border-radius: 12px;
+  background: rgba(22, 27, 34, 0.72);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gang-notes h4 { margin: 0; font-size: 12px; color: #8b98a7; font-weight: 600; }
+.gang-note { font-size: 12.5px; color: #c9d3df; }
+.gang-secret { font-size: 12.5px; color: #d9a521; }
 .gang-top {
   display: flex;
   align-items: center;
@@ -173,21 +268,27 @@ const CSS = `
 }
 .gang-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
 .gang-card {
-  width: 42px; height: 60px; border-radius: 7px;
+  width: 46px; height: 64px; border-radius: 7px;
   background: #f5f7fa; color: #10151c;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 15px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
   border: 1px solid #c9d3df;
+  line-height: 1.02;
 }
+.gang-card b { font-size: 21px; font-weight: 750; letter-spacing: -0.02em; }
+.gang-card i { font-size: 18px; font-style: normal; }
 .gang-card.dim { background: rgba(245, 247, 250, 0.07); color: transparent; border-style: dashed; border-color: #2f3a48; }
 .gang-muted { color: #8b98a7; font-size: 12px; }
 .gang-hand { display: flex; align-items: center; gap: 10px; }
-.gang-hand .gang-card { width: 52px; height: 74px; font-size: 17px; }
+.gang-hand .gang-card { width: 66px; height: 92px; }
+.gang-hand .gang-card b { font-size: 30px; }
+.gang-hand .gang-card i { font-size: 26px; }
 .gang-controls {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  display: flex; flex-direction: column; gap: 10px;
   border: 1px solid #262d38; border-radius: 12px; padding: 10px 12px;
   background: rgba(22, 27, 34, 0.72);
 }
+.gang-picks { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gang-actions { display: flex; align-items: center; gap: 10px; min-height: 36px; }
 .gang-pick {
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; border-radius: 10px; cursor: pointer;
@@ -236,7 +337,12 @@ function nameOf(id: string): string {
 function cardHtml(card: string): string {
   const suit = card.slice(-1);
   const red = suit === '♥' || suit === '♦';
-  return `<span class="gang-card" style="${red ? 'color:#c0392b' : ''}">${card}</span>`;
+  if (suit === '*') {
+    // 老千那张万能 J：没有花色
+    return `<span class="gang-card" style="border-color:#d9a521"><b>J</b><i style="color:#8b98a7">★</i></span>`;
+  }
+  const rank = card.slice(0, -1);
+  return `<span class="gang-card" style="${red ? 'color:#c0392b' : ''}"><b>${rank}</b><i>${suit}</i></span>`;
 }
 
 function chipHtml(roundIndex: number, star: number | null): string {
@@ -266,17 +372,18 @@ function renderTop(data: GangData): string {
 
 function renderCards(data: GangData): string {
   const cards = data.challengeInfo ?? [];
-  if (cards.length === 0 && data.specialist == null) return '';
+  const blackout = (data.blackoutRounds ?? []).length > 0;
+  if (cards.length === 0 && !blackout) return '';
   const items = cards
     .map(
       (card) =>
         `<div class="gang-card-item"><strong>挑战 · ${card.name}</strong><span>${card.text}</span></div>`,
     )
     .join('');
-  const blackout = (data.blackoutRounds ?? []).length > 0
+  const blackoutLine = blackout
     ? `<div class="gang-muted">断电：第 ${data.blackoutRounds.join('、')} 轮的筹码已经丢弃</div>`
     : '';
-  return `<div class="gang-cards">${items}${blackout}</div>`;
+  return `<div class="gang-cards">${items}${blackoutLine}</div>`;
 }
 
 function renderGuess(data: GangData, view: PublicView): string {
@@ -307,16 +414,20 @@ function renderGuess(data: GangData, view: PublicView): string {
   if (isTarget) {
     return `
       <div class="gang-controls">
-        <span class="gang-muted">${prompt}——你是被猜的人，不能参与</span>
-        <span class="gang-muted">已投 ${voted}/${total}</span>
+        <div class="gang-picks">
+          <span class="gang-muted">${prompt}——你是被猜的人，不能参与</span>
+          <span class="gang-muted">已投 ${voted}/${total}</span>
+        </div>
       </div>`;
   }
 
   return `
     <div class="gang-controls">
-      <span class="gang-muted">${prompt}（要全队一致）</span>
-      ${choices}
-      <span class="gang-muted">已投 ${voted}/${total}${guess.mine ? ' · 你选了 ' + (guess.kind === 'value' ? guess.mine : CATEGORY_LABEL[guess.mine]) : ''}</span>
+      <div class="gang-picks">
+        <span class="gang-muted">${prompt}（要全队一致）</span>
+        ${choices}
+        <span class="gang-muted">已投 ${voted}/${total}${guess.mine ? ' · 你选了 ' + (guess.kind === 'value' ? guess.mine : CATEGORY_LABEL[guess.mine]) : ''}</span>
+      </div>
     </div>`;
 }
 
@@ -399,9 +510,11 @@ function renderControls(data: GangData, view: PublicView): string {
 
   return `
     <div class="gang-controls">
-      <span class="gang-muted">${ROUND_NAME[data.round - 1]} · 你觉得自己排第几？</span>
-      ${picks.join('')}
-      ${confirm}
+      <div class="gang-picks">
+        <span class="gang-muted">${ROUND_NAME[data.round - 1]} · 你觉得自己排第几？</span>
+        ${picks.join('')}
+      </div>
+      <div class="gang-actions">${confirm}</div>
     </div>`;
 }
 
@@ -457,6 +570,71 @@ function renderFinish(data: GangData): string {
     </div>`;
 }
 
+let useStep: { kind: 'target' | 'card' | 'value'; target?: string } | null = null;
+
+function renderSpecialist(data: GangData, view: PublicView): string {
+  const info = data.specialistInfo;
+  if (!info) return '';
+  const mine = data.you;
+  const amPlayer = view.players.includes(mine);
+
+  const header = `<div class="gang-picks"><span class="gang-muted">专家卡</span><strong>${info.name}</strong><span class="gang-muted">${info.text}</span></div>`;
+
+  if (data.specialistUsed) {
+    const who = data.specialistOwner ? `（${nameOf(data.specialistOwner)}）` : '';
+    return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">已经用过了${who}</span></div></div>`;
+  }
+
+  if (data.pending?.player === mine) {
+    const cards = (data.hands[mine] ?? [])
+      .map(
+        (card, index) =>
+          `<button class="gang-pick" data-act="spec-discard" data-index="${index}">${cardHtml(card)}</button>`,
+      )
+      .join('');
+    return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">多了一张，选一张弃掉</span>${cards}</div></div>`;
+  }
+
+  if (!amPlayer) {
+    return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">等他们决定要不要用</span></div></div>`;
+  }
+
+  if (info.id === 3 || info.id === 6 || info.id === 8 || info.id === 9) {
+    return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">发牌时已经自动生效</span></div></div>`;
+  }
+
+  if (!useStep) {
+    return `<div class="gang-controls">${header}<div class="gang-actions"><button class="gang-btn primary" data-act="spec-use">使用专家卡</button></div></div>`;
+  }
+
+  if (useStep.kind === 'target') {
+    const targets = view.players
+      .filter((player) => player !== mine)
+      .map(
+        (player) =>
+          `<button class="gang-pick" data-act="spec-target" data-target="${player}">${nameOf(player)}</button>`,
+      )
+      .join('');
+    return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">给谁看？</span>${targets}</div></div>`;
+  }
+
+  if (useStep.kind === 'card') {
+    const cards = (data.hands[mine] ?? [])
+      .map(
+        (card, index) =>
+          `<button class="gang-pick" data-act="spec-card" data-index="${index}">${cardHtml(card)}</button>`,
+      )
+      .join('');
+    return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">给他看哪一张？</span>${cards}</div></div>`;
+  }
+
+  const values = VALUE_CHOICES.map(
+    (value) =>
+      `<button class="gang-pick" data-act="spec-value" data-value="${value}">${value}</button>`,
+  ).join('');
+  return `<div class="gang-controls">${header}<div class="gang-actions"><span class="gang-muted">问哪个点数？</span>${values}</div></div>`;
+}
+
 function render(): void {
   if (!root || !context || !snapshot) return;
   const view = snapshot.view;
@@ -469,6 +647,7 @@ function render(): void {
   const parts = [
     renderTop(data),
     renderCards(data),
+    view.finished ? '' : renderSpecialist(data, view),
     renderTable(data, view),
     renderCenter(data),
     renderHand(data),
@@ -480,7 +659,7 @@ function render(): void {
     parts.push(renderControls(data, view), renderGuess(data, view), renderResult(data, view));
   }
 
-  root.innerHTML = `<div class="gang">${parts.join('')}</div>`;
+  root.innerHTML = `<div class="gang"><div class="gang-main">${parts.join('')}</div>${renderRail(data)}</div>`;
 }
 
 function onClick(event: Event): void {
@@ -498,6 +677,30 @@ function onClick(event: Event): void {
   } else if (act === 'guess') {
     const value = target.dataset.value;
     if (value) context.send({ type: 'guess', payload: { value } });
+  } else if (act === 'spec-use') {
+    const id = (snapshot?.view?.data as unknown as GangData | undefined)?.specialistInfo?.id;
+    if (id === 1) useStep = { kind: 'target' };
+    else if (id === 4) useStep = { kind: 'value' };
+    else context.send({ type: 'useSpecialist', payload: {} });
+    render();
+  } else if (act === 'spec-target') {
+    useStep = { kind: 'card', target: target.dataset.target };
+    render();
+  } else if (act === 'spec-card') {
+    const index = Number(target.dataset.index);
+    if (useStep?.target != null) {
+      context.send({ type: 'useSpecialist', payload: { target: useStep.target, card: index } });
+    }
+    useStep = null;
+    render();
+  } else if (act === 'spec-value') {
+    const value = target.dataset.value;
+    if (value) context.send({ type: 'useSpecialist', payload: { value } });
+    useStep = null;
+    render();
+  } else if (act === 'spec-discard') {
+    const index = Number(target.dataset.index);
+    if (Number.isFinite(index)) context.send({ type: 'discard', payload: { index } });
   }
 }
 
@@ -507,7 +710,7 @@ function mount(next: GameClientContext): void {
   root = document.createElement('div');
   root.className = 'gang-root';
   next.root.append(root);
-  next.root.addEventListener('click', onClick);
+  next.root.addEventListener('pointerdown', onClick);
   render();
 }
 
@@ -517,7 +720,7 @@ function update(next: ClientSnapshot): void {
 }
 
 function unmount(): void {
-  context?.root.removeEventListener('click', onClick);
+  context?.root.removeEventListener('pointerdown', onClick);
   root?.remove();
   root = null;
   context = null;

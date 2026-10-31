@@ -672,6 +672,7 @@ export class TableService {
       pace: table.pace,
       friendly: table.friendly,
       timeoutStreak: table.timeoutStreak,
+      ui: { hideLog: runtime.manifest.ui?.hideLog === true },
       log: table.log.filter((entry) => entry.to === 'all' || entry.to.includes(viewerId)).slice(-80),
       chat,
       viewers: this.presence.viewers(table.id),

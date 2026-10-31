@@ -68,6 +68,11 @@ export interface GameManifest {
     choices: { value: string; label: string; hint?: string }[];
     default: string;
   }[];
+  /** 牌桌界面上想改的地方：比如这个游戏的日志没用，就别占一列 */
+  ui?: {
+    /** 隐藏右侧「对局日志」（聊天还在） */
+    hideLog?: boolean;
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -315,6 +320,8 @@ export interface TableSnapshot {
   friendly: boolean;
   /** 连续超时次数，满 3 次判负 */
   timeoutStreak: number;
+  /** 插件声明的界面偏好 */
+  ui?: { hideLog?: boolean };
   log: LogEntry[];
   /** 最近若干条聊天 */
   chat: ChatMessage[];

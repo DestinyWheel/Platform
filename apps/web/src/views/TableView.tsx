@@ -303,16 +303,20 @@ export function TableView({
         </section>
 
         <aside className="sidebar">
-          <h3>对局日志</h3>
-          <ul className="log-list" ref={logRef}>
-            {snapshot.log.map((entry) => (
-              <li key={entry.seq}>
-                <span className="log-seq">{entry.seq}</span>
-                {renderLog(entry, client)}
-              </li>
-            ))}
-            {snapshot.log.length === 0 ? <li className="muted">还没有记录</li> : null}
-          </ul>
+          {snapshot.ui?.hideLog ? null : (
+            <>
+              <h3>对局日志</h3>
+              <ul className="log-list" ref={logRef}>
+                {snapshot.log.map((entry) => (
+                  <li key={entry.seq}>
+                    <span className="log-seq">{entry.seq}</span>
+                    {renderLog(entry, client)}
+                  </li>
+                ))}
+                {snapshot.log.length === 0 ? <li className="muted">还没有记录</li> : null}
+              </ul>
+            </>
+          )}
 
           <div className="chat">
             <h3>聊天</h3>
