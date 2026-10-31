@@ -161,11 +161,16 @@ const CSS = `
 .md-legend { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; font-size:11px; color:#6b7787; }
 .md-legend i { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:5px; vertical-align:middle; border:1px solid rgba(255,255,255,.18); }
 
-.md-mandalas { display:flex; gap:28px; justify-content:center; flex-wrap:wrap; }
-.md-m { display:flex; flex-direction:column; align-items:center; gap:6px; }
+/* 两幅曼荼罗并排：grid + minmax(0,1fr) 保证它们分得掉，不会因为放不下就换行堆起来 */
+.md-mandalas { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:24px; align-items:start; }
+.md-m { display:flex; flex-direction:column; align-items:center; gap:6px; min-width:0; }
 .md-m-title { font-size:12px; letter-spacing:.06em; color:#8b98a7; }
 .md-m-title b { color:#c9d4e0; }
-.md-svg { width:min(340px, 46vw); height:auto; display:block; overflow:visible; }
+.md-svg { width:100%; max-width:340px; height:auto; display:block; overflow:visible; }
+
+@media (max-width: 560px) {
+  .md-mandalas { grid-template-columns: 1fr; }
+}
 
 .md-cell { transition:fill .18s, stroke .18s; }
 .md-zone.can { cursor:pointer; }
@@ -196,6 +201,11 @@ const CSS = `
 .md-settling .md-halo { animation: md-breathe 1.8s ease-in-out infinite; }
 
 .md-rivers { display:flex; gap:24px; justify-content:center; align-items:flex-start; flex-wrap:wrap; }
+/* 自己的那一栏：沙杯（带手牌数）在上，长河在下 */
+.md-mine { display:flex; flex-direction:column; align-items:center; gap:8px; }
+.md-mine-top { display:flex; align-items:center; gap:16px; flex-wrap:wrap; justify-content:center; }
+.md-handcount { font-size:12px; color:#8b98a7; }
+.md-handcount b { color:#e6edf3; }
 .md-river { display:flex; flex-direction:column; gap:6px; align-items:center; }
 .md-river-title { font-size:12px; color:#8b98a7; }
 .md-slots { display:flex; gap:4px; }
@@ -561,9 +571,16 @@ function render(): void {
       </div>
       ${settleHtml}
       ${resultHtml}
-      <div class="md-rivers">
+      <div class="md-mine">
+        ${
+          me
+            ? `<div class="md-mine-top">
+                 <span class="md-handcount">手牌 <b>${me.handCount}</b></span>
+                 ${cupHtml(me, '我的')}
+               </div>`
+            : ''
+        }
         ${me ? riverHtml(me, '我的长河') : ''}
-        ${me ? cupHtml(me, '我的') : ''}
       </div>
       <div class="md-hand">${handHtml}</div>
       ${actionsHtml}
