@@ -128,6 +128,9 @@ export async function publishDirectory(
     deps.log?.(`插件 ${manifest.id}@${manifest.version} 已发布（冒烟 ${report.steps} 步，hash ${built.hash}）`);
 
     if (options.activate) {
+      // 被管理员禁用的版本，自动发布不能把它重新激活——否则重启一次就白禁了。
+      // 想恢复得走管理后台的「启用」，那是明确的动作。
+      if (existing?.status === 'disabled') return record;
       return deps.host.setActive(manifest.id, manifest.version);
     }
     return record;

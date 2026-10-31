@@ -741,6 +741,19 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   });
 
   /**
+   * 禁用：把版本从 active 摘掉，大厅不再列出、也开不了新房。
+   * 已经开着的牌桌不受影响——那些桌锁的是版本，插件还在内存里。
+   */
+  app.post('/api/admin/plugins/:gameId/:version/disable', async (request) => {
+    const admin = await requireAdmin(request);
+    const { gameId, version } = request.params as { gameId: string; version: string };
+    await host.disable(gameId, version);
+    const released = await collectGarbage();
+    app.log.info({ admin: admin.name, game: gameId, version }, '插件已禁用');
+    return { ok: true, released, loaded: host.loadedVersions() };
+  });
+
+  /**
    * 回收：把"不是 active、也没有进行中牌桌在用"的插件 worker 卸载掉。
    * 卸载后如果有人还要看回放，会按需重新加载。
    */

@@ -137,7 +137,7 @@ export function GameDetail({
       {error ? <div className="error">{error}</div> : null}
 
       {!game ? (
-        <p className="muted">{games ? '找不到这个游戏，可能已经被下架了。' : '加载中…'}</p>
+        <p className="muted">{games ? '这个游戏不存在，或者已被管理员禁用。' : '加载中…'}</p>
       ) : (
         <div className="detail-columns">
           <section className="detail-main">

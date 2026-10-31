@@ -446,7 +446,7 @@ CREATE TABLE game_versions (
   manifest      jsonb NOT NULL,
   client_url    text NOT NULL,
   bundle_hash   text NOT NULL,
-  status        text NOT NULL DEFAULT 'pending',  -- pending|active|retired|failed
+  status        text NOT NULL DEFAULT 'pending',  -- pending|active|retired|failed|disabled
   created_at    timestamptz DEFAULT now(),
   PRIMARY KEY (game_id, version)
 );

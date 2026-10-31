@@ -3,7 +3,7 @@ import type { GameManifest, GamePlugin } from '@platform/sdk';
 /** 宿主支持的插件 API 大版本。插件 manifest.apiVersion 必须与之匹配。 */
 export const HOST_API_VERSION = '1.0.0';
 
-export type VersionStatus = 'pending' | 'active' | 'retired' | 'failed';
+export type VersionStatus = 'pending' | 'active' | 'retired' | 'failed' | 'disabled';
 
 export interface GameVersionRecord {
   gameId: string;

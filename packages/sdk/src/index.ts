@@ -344,7 +344,7 @@ export interface AdminPluginVersion {
   gameId: string;
   name: string;
   version: string;
-  status: 'pending' | 'active' | 'retired' | 'failed';
+  status: 'pending' | 'active' | 'retired' | 'failed' | 'disabled';
   hash: string;
   error: string | null;
   createdAt: number;

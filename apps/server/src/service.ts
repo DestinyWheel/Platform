@@ -126,7 +126,7 @@ export class TableService {
 
   async createTable(user: UserRecord, input: CreateTableInput): Promise<string> {
     const active = this.host.activeFor(input.gameId);
-    if (!active) throw new ServiceError('unknown_game', `没有这个游戏：${input.gameId}`);
+    if (!active) throw new ServiceError('unknown_game', `游戏「${input.gameId}」当前不可用（可能已被管理员禁用）`);
 
     const { min, max } = active.manifest.players;
     const requested = input.maxPlayers ?? max;

@@ -104,6 +104,20 @@ export class PluginHost {
   }
 
   /**
+   * 禁用：从 active 指针上摘掉，游戏就不再出现在大厅、也开不了新房。
+   *
+   * worker 先不动——可能还有进行中的牌桌在用它，`releaseIdle()` 会在没桌用的时候收掉。
+   * 恢复走 `setActive()`，它会重新加载并切回 active。
+   */
+  async disable(gameId: string, version: string): Promise<void> {
+    const record = await this.store.getGameVersion(gameId, version);
+    if (!record) throw new PluginError('unknown_version', `找不到插件 ${gameId}@${version}`);
+
+    await this.store.setVersionStatus(gameId, version, 'disabled');
+    if (this.active.get(gameId)?.version === version) this.active.delete(gameId);
+  }
+
+  /**
    * 回收：卸载既不是 active、也没有进行中牌桌在用的版本。
    *
    * 这就是 worker 隔离换来的东西——卸载 = terminate，模块图真能从内存消失；

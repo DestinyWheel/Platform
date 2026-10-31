@@ -147,6 +147,12 @@ export interface Store {
   markVersionFailed(gameId: string, version: string, error: string): Promise<void>;
   /** 事务：把该游戏原 active 版本降级为 retired，再激活指定版本 */
   setActiveVersion(gameId: string, version: string): Promise<void>;
+  /** 只改状态（禁用 / 恢复），不涉及 worker 加载 */
+  setVersionStatus(
+    gameId: string,
+    version: string,
+    status: GameVersionRecord['status'],
+  ): Promise<void>;
   /** 还有进行中牌桌在用的版本（`gameId@version`），用于判断能否卸载 */
   listInUseVersions(): Promise<Set<string>>;
 
@@ -233,7 +239,7 @@ export interface GameVersionRecord {
   manifest: GameManifest;
   dir: string;
   hash: string;
-  status: 'pending' | 'active' | 'retired' | 'failed';
+  status: 'pending' | 'active' | 'retired' | 'failed' | 'disabled';
   error: string | null;
   createdAt: number;
   activatedAt: number | null;
@@ -702,9 +708,19 @@ export class PgStore implements Store {
     });
   }
 
-  /* ------------------------- 聊天 / 战绩 ------------------------- */
+  async setVersionStatus(
+    gameId: string,
+    version: string,
+    status: GameVersionRecord['status'],
+  ): Promise<void> {
+    await this.db.execute('UPDATE game_versions SET status = $3 WHERE game_id = $1 AND version = $2', [
+      gameId,
+      version,
+      status,
+    ]);
+  }
 
-  async listInUseVersions(): Promise<Set<string>> {
+  /* ------------------------- 聊天 / 战绩 ------------------------- */  async listInUseVersions(): Promise<Set<string>> {
     const rows = await this.db.query<{ game_id: string; game_version: string }>(
       `SELECT DISTINCT game_id, game_version FROM tables WHERE status <> 'finished'`,
     );

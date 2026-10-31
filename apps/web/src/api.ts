@@ -221,6 +221,13 @@ export const api = {
       { method: 'POST' },
     ),
 
+  /** 禁用：大厅下架、不能开新房；进行中的牌桌照常打完 */
+  adminDisable: (gameId: string, version: string) =>
+    request<{ ok: true; released: string[]; loaded: string[] }>(
+      `/admin/plugins/${encodeURIComponent(gameId)}/${encodeURIComponent(version)}/disable`,
+      { method: 'POST' },
+    ),
+
   adminGc: () =>
     request<{ released: string[]; loaded: string[] }>('/admin/plugins/gc', { method: 'POST' }),
 

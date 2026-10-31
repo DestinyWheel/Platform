@@ -16,6 +16,7 @@ const STATUS_LABEL: Record<AdminPluginVersion['status'], string> = {
   retired: '已退役',
   pending: '待激活',
   failed: '失败',
+  disabled: '已禁用',
 };
 
 function messageOf(error: unknown): string {
@@ -135,6 +136,14 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
       await api.adminActivate(version.gameId, version.version);
       await Promise.all([loadPlugins(), loadOverview()]);
       return `已切到 ${version.gameId}@${version.version}；进行中的牌桌仍跑它们开局时锁定的版本`;
+    });
+  };
+
+  const disable = (version: AdminPluginVersion): void => {
+    void run(`disable:${version.gameId}@${version.version}`, async () => {
+      await api.adminDisable(version.gameId, version.version);
+      await Promise.all([loadPlugins(), loadOverview()]);
+      return `已禁用 ${version.gameId}：大厅不再显示，也开不了新房；进行中的牌桌不受影响`;
     });
   };
 
@@ -370,13 +379,23 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
                   <td className="muted small">{formatTime(version.createdAt)}</td>
                   <td className="muted small mono">{version.hash.slice(0, 8)}</td>
                   <td>
-                    <button
-                      className="ghost small"
-                      disabled={version.status === 'active' || busy === `activate:${version.gameId}@${version.version}`}
-                      onClick={() => activate(version)}
-                    >
-                      {version.status === 'active' ? '当前' : '激活'}
-                    </button>
+                    {version.status === 'active' ? (
+                      <button
+                        className="ghost small"
+                        disabled={busy === `disable:${version.gameId}@${version.version}`}
+                        onClick={() => disable(version)}
+                      >
+                        禁用
+                      </button>
+                    ) : (
+                      <button
+                        className="ghost small"
+                        disabled={busy === `activate:${version.gameId}@${version.version}`}
+                        onClick={() => activate(version)}
+                      >
+                        {version.status === 'disabled' ? '启用' : '激活'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
