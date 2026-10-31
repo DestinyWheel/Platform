@@ -192,12 +192,20 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   };
 
   /* ---------------------- 插件产物静态托管 ---------------------- */
-  // URL 里带版本号，所以可以放心长缓存：发新版换 URL，老桌继续用老 URL
+  /**
+   * 这里原来写的是 `public, max-age=31536000, immutable`，理由是"URL 里带版本号，
+   * 发新版换 URL"。这个理由只在**版本号真的变了**时成立：开发期经常沿用同一个版本号
+   * 重新发布（0.1.0 改十次还是 0.1.0），浏览器于是把第一份 client.js 缓存一年，
+   * 之后怎么改都看不到——踩过一次，界面停留在旧布局。
+   *
+   * 现在改成 no-cache（每次带 ETag 回源校验）：文件没变就是一个 304，几乎不花钱；
+   * 变了立刻拿到新的。要长缓存也不是不行，但得先让 URL 真的随内容变。
+   */
   await app.register(fastifyStatic, {
     root: storageRoot,
     prefix: '/plugins/',
     setHeaders: (response) => {
-      response.header('cache-control', 'public, max-age=31536000, immutable');
+      response.header('cache-control', 'no-cache');
     },
   });
 
@@ -216,6 +224,11 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       prefix: '/',
       decorateReply: false,
       maxAge: '1h',
+      // 带 hash 的 assets/*.js 可以放心缓存；index.html 不能——
+      // 它一被缓存，发版后页面还指着旧 hash 的文件，等于没发版。
+      setHeaders: (response, filePath) => {
+        if (filePath.endsWith('index.html')) response.header('cache-control', 'no-cache');
+      },
     });
 
     app.setNotFoundHandler((request, reply) => {
@@ -224,7 +237,10 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         return reply.code(404).send({ code: 'not_found', message: '接口不存在' });
       }
       // 前端是 hash 路由，任何非静态路径都回 index.html
-      return reply.type('text/html; charset=utf-8').send(indexHtml);
+      return reply
+        .header('cache-control', 'no-cache')
+        .type('text/html; charset=utf-8')
+        .send(indexHtml);
     });
   } else {
     app.log.warn(
