@@ -250,6 +250,9 @@ function renderHand(data: GangData): string {
 
 function renderControls(data: GangData, view: PublicView): string {
   if (view.phase !== 'draft') return '';
+  if (!view.players.includes(data.you)) {
+    return '<div class="gang-controls"><span class="gang-muted">你在观战，等他们打</span></div>';
+  }
   const roundIndex = data.round - 1;
   const mine = data.chips[data.you]?.[roundIndex] ?? null;
   const ready = data.ready[data.you];
