@@ -58,6 +58,16 @@ export interface GameManifest {
    * 不自动替人走，那种桌按友谊赛处理（不计分）。
    */
   realtime?: { fast: number; normal: number; slow: number };
+  /**
+   * 开桌时可以选的对局设置。选中值会原样进 createState(options)，
+   * 默认值就是建桌时没传时的值。
+   */
+  options?: {
+    key: string;
+    label: string;
+    choices: { value: string; label: string; hint?: string }[];
+    default: string;
+  }[];
 }
 
 /* ------------------------------------------------------------------ */

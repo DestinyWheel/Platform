@@ -86,6 +86,9 @@ function StartPanel({
   const [startHour, setStartHour] = useState(19);
   const [endHour, setEndHour] = useState(23);
   const [seats, setSeats] = useState(game.players.max);
+  const [picked, setPicked] = useState<Record<string, string>>(() =>
+    Object.fromEntries((game.options ?? []).map((group) => [group.key, group.default])),
+  );
   const [busy, setBusy] = useState<'create' | 'quick' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,7 +96,13 @@ function StartPanel({
   const windowStart = mode === 'turnbased' && withWindow ? localHourToUtcMinutes(startHour) : null;
   const windowEnd = mode === 'turnbased' && withWindow ? localHourToUtcMinutes(endHour) : null;
 
-  const settings = { mode, pace, windowStart, windowEnd };
+  const settings = {
+    mode,
+    pace,
+    windowStart,
+    windowEnd,
+    ...(Object.keys(picked).length > 0 ? { options: picked } : {}),
+  };
 
   const create = async (): Promise<void> => {
     setBusy('create');
@@ -233,6 +242,25 @@ function StartPanel({
         ) : (
           <p className="muted small">固定 {game.players.min} 人</p>
         )}
+
+        {(game.options ?? []).map((group) => (
+          <div className="field" key={group.key}>
+            <span>{group.label}</span>
+            <div className="chip-row">
+              {group.choices.map((choice) => (
+                <button
+                  key={choice.value}
+                  type="button"
+                  className={`chip ${picked[group.key] === choice.value ? 'active' : ''}`}
+                  title={choice.hint}
+                  onClick={() => setPicked((prev) => ({ ...prev, [group.key]: choice.value }))}
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
 
         <div className="dialog-actions">
           <button className="ghost" onClick={onClose}>

@@ -28,12 +28,29 @@ interface LastResult {
   seats: Seat[];
   community: string[];
   badAt: number | null;
+  guess: { kind: 'value' | 'rank'; value: string; ok: boolean } | null;
+}
+
+interface CardInfo {
+  id: number;
+  name: string;
+  text: string;
+}
+
+interface GuessInfo {
+  kind: 'value' | 'rank';
+  target: string;
+  voted: string[];
+  mine: string | null;
 }
 
 interface GangData {
   heist: number;
   vaults: number;
   alarms: number;
+  alarmsToLose: number;
+  mode: string;
+  modeName: string;
   round: number;
   community: string[];
   chips: Record<string, (number | null)[]>;
@@ -45,7 +62,29 @@ interface GangData {
   last: LastResult | null;
   history: LastResult[];
   win: boolean | null;
+  challenge: number[];
+  challengeInfo: CardInfo[];
+  specialist: number | null;
+  permanent: number | null;
+  blackoutRounds: number[];
+  guess: GuessInfo | null;
+  guessOk: boolean | null;
 }
+
+const CATEGORY_LABEL: Record<string, string> = {
+  highcard: '高牌',
+  pair: '一对',
+  twopair: '两对',
+  trips: '三条',
+  straight: '顺子',
+  flush: '同花',
+  fullhouse: '葫芦',
+  quads: '四条',
+  straightflush: '同花顺',
+  royalflush: '皇家同花顺',
+};
+
+const VALUE_CHOICES = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
 const CSS = `
 .gang {
@@ -71,6 +110,25 @@ const CSS = `
 .gang-dots { letter-spacing: 2px; }
 .gang-dots.vault { color: #d9a521; }
 .gang-dots.alarm { color: #f85149; }
+.gang-mode {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #2c3745;
+  color: #8b98a7;
+}
+.gang-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #3a2f1a;
+  border-radius: 12px;
+  background: rgba(217, 165, 33, 0.08);
+  padding: 10px 12px;
+}
+.gang-card-item { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.gang-card-item strong { color: #d9a521; font-weight: 600; }
+.gang-card-item span { color: #c9d3df; }
 .gang-round { margin-left: auto; color: #8b98a7; font-size: 13px; }
 .gang-table {
   display: grid;
@@ -197,11 +255,68 @@ function renderTop(data: GangData): string {
   return `
     <div class="gang-top">
       <div class="gang-heist">第 ${data.heist} 次抢劫</div>
+      <span class="gang-mode">${data.modeName ?? ''}</span>
       <div class="gang-progress">
         <span>金库 ${dots(data.vaults, 3, 'vault')}</span>
-        <span>警报 ${dots(data.alarms, 3, 'alarm')}</span>
+        <span>警报 ${dots(data.alarms, data.alarmsToLose ?? 3, 'alarm')}</span>
       </div>
       <div class="gang-round">${ROUND_NAME[data.round - 1] ?? ''} · ${CHIP_NAME[data.round] ?? ''}筹码</div>
+    </div>`;
+}
+
+function renderCards(data: GangData): string {
+  const cards = data.challengeInfo ?? [];
+  if (cards.length === 0 && data.specialist == null) return '';
+  const items = cards
+    .map(
+      (card) =>
+        `<div class="gang-card-item"><strong>挑战 · ${card.name}</strong><span>${card.text}</span></div>`,
+    )
+    .join('');
+  const blackout = (data.blackoutRounds ?? []).length > 0
+    ? `<div class="gang-muted">断电：第 ${data.blackoutRounds.join('、')} 轮的筹码已经丢弃</div>`
+    : '';
+  return `<div class="gang-cards">${items}${blackout}</div>`;
+}
+
+function renderGuess(data: GangData, view: PublicView): string {
+  if (view.phase !== 'guess' || !data.guess) return '';
+  const guess = data.guess;
+  const isTarget = guess.target === data.you;
+  const voted = guess.voted.length;
+  const total = view.players.length - 1;
+
+  const choices =
+    guess.kind === 'value'
+      ? VALUE_CHOICES.map(
+          (value) =>
+            `<button class="gang-pick${guess.mine === value ? ' held' : ''}" data-act="guess" data-value="${value}">${value}</button>`,
+        ).join('')
+      : Object.entries(CATEGORY_LABEL)
+          .map(
+            ([key, label]) =>
+              `<button class="gang-pick${guess.mine === key ? ' held' : ''}" data-act="guess" data-value="${key}">${label}</button>`,
+          )
+          .join('');
+
+  const prompt =
+    guess.kind === 'value'
+      ? `猜 ${nameOf(guess.target)} 手里至少有一张什么点数`
+      : `猜 ${nameOf(guess.target)} 最后是什么牌型`;
+
+  if (isTarget) {
+    return `
+      <div class="gang-controls">
+        <span class="gang-muted">${prompt}——你是被猜的人，不能参与</span>
+        <span class="gang-muted">已投 ${voted}/${total}</span>
+      </div>`;
+  }
+
+  return `
+    <div class="gang-controls">
+      <span class="gang-muted">${prompt}（要全队一致）</span>
+      ${choices}
+      <span class="gang-muted">已投 ${voted}/${total}${guess.mine ? ' · 你选了 ' + (guess.kind === 'value' ? guess.mine : CATEGORY_LABEL[guess.mine]) : ''}</span>
     </div>`;
 }
 
@@ -310,7 +425,14 @@ function renderResult(data: GangData, view: PublicView): string {
     })
     .join('');
 
-  const title = last.ok ? '✓ 这次抢劫成了' : '✗ 有人排错了，警报响了';
+  const title = last.ok
+    ? '✓ 这次抢劫成了'
+    : last.guess && !last.guess.ok
+      ? '✗ 全队猜错了，警报响了'
+      : '✗ 有人排错了，警报响了';
+  const guessLine = last.guess
+    ? `<div class="gang-muted">全队猜的是 <strong>${last.guess.kind === 'value' ? last.guess.value : CATEGORY_LABEL[last.guess.value] ?? last.guess.value}</strong> · ${last.guess.ok ? '猜对了' : '猜错了，这次抢劫直接失败'}</div>`
+    : '';
   const footer =
     view.phase === 'heistResult'
       ? '<button class="gang-btn success" data-act="advance">继续下一次</button>'
@@ -319,6 +441,7 @@ function renderResult(data: GangData, view: PublicView): string {
   return `
     <div class="gang-result ${last.ok ? 'ok' : 'fail'}">
       <h3>${title}</h3>
+      ${guessLine}
       <div class="gang-muted">按红筹码从小到大亮牌</div>
       ${lines}
       ${footer}
@@ -343,12 +466,18 @@ function render(): void {
   }
 
   const data = view.data as unknown as GangData;
-  const parts = [renderTop(data), renderTable(data, view), renderCenter(data), renderHand(data)];
+  const parts = [
+    renderTop(data),
+    renderCards(data),
+    renderTable(data, view),
+    renderCenter(data),
+    renderHand(data),
+  ];
 
   if (view.finished) {
     parts.push(renderResult(data, view), renderFinish(data));
   } else {
-    parts.push(renderControls(data, view), renderResult(data, view));
+    parts.push(renderControls(data, view), renderGuess(data, view), renderResult(data, view));
   }
 
   root.innerHTML = `<div class="gang">${parts.join('')}</div>`;
@@ -366,6 +495,9 @@ function onClick(event: Event): void {
     context.send({ type: 'confirm', payload: {} });
   } else if (act === 'advance') {
     context.send({ type: 'advance', payload: {} });
+  } else if (act === 'guess') {
+    const value = target.dataset.value;
+    if (value) context.send({ type: 'guess', payload: { value } });
   }
 }
 

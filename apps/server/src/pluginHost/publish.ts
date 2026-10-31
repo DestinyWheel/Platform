@@ -31,6 +31,27 @@ const manifestSchema = z
       .optional(),
     /** 更新公告：玩家第一次进到跑这一版的桌时要读一次 */
     notes: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
+    /** 开桌时可以选的对局设置，原样传给插件的 createState(options) */
+    options: z
+      .array(
+        z.object({
+          key: z.string().regex(/^[a-z0-9_-]{1,24}$/, '选项 key 只能用小写字母/数字/下划线'),
+          label: z.string().trim().min(1).max(40),
+          default: z.string().max(40),
+          choices: z
+            .array(
+              z.object({
+                value: z.string().max(40),
+                label: z.string().trim().min(1).max(40),
+                hint: z.string().trim().max(200).optional(),
+              }),
+            )
+            .min(1)
+            .max(8),
+        }),
+      )
+      .max(4)
+      .optional(),
   })
   .refine((manifest) => manifest.players.max >= manifest.players.min, {
     message: 'players.max 不能小于 players.min',
