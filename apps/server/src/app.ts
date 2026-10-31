@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -125,13 +125,29 @@ export interface AppOptions {
 }
 
 export async function buildApp(options: AppOptions = {}): Promise<FastifyInstance> {
+  // 配了证书就直接说 HTTPS：不配还是原来的 http，本地开发/测试不受影响
+  const tlsCert = process.env.TLS_CERT;
+  const tlsKey = process.env.TLS_KEY;
+  const tls =
+    tlsCert && tlsKey && existsSync(tlsCert) && existsSync(tlsKey)
+      ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) }
+      : undefined;
+
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
     // 每个请求一个 id，日志里能串起一次完整调用
     genReqId: () => randomUUID(),
     // 插件上传包可能几百 KB，放宽一点
     bodyLimit: 8 * 1024 * 1024,
+    ...(tls ? { https: tls } : {}),
   });
+
+  if (tls) {
+    // 自签证书也先给 HSTS：一旦用 https 打开过，就别再回落到 http
+    app.addHook('onSend', async (_request, reply) => {
+      reply.header('strict-transport-security', 'max-age=31536000');
+    });
+  }
 
   await app.register(cors, { origin: true });
 
