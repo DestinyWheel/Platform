@@ -23,9 +23,21 @@ body,
   height: 100%;
 }
 
+/*
+ * 底色和顶部那层蓝光都钉在视口上，并且不重复：
+ * body 只有一屏高，原来的写法会让这层渐变每 100vh 平铺一次，
+ * 长页面滚到下面就会看见一条「上半亮、下半黑」的接缝。
+ * 渐变末端淡到全透明（同一个色的 alpha 0），所以也不会有硬边。
+ */
+html {
+  background-color: var(--bg);
+  background-image: radial-gradient(1100px 720px at 18% -8%, #17202b 0%, rgba(23, 32, 43, 0) 72%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 body {
   margin: 0;
-  background: radial-gradient(circle at 20% 0%, #17202b 0%, var(--bg) 55%);
   color: var(--text);
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   font-size: 15px;
