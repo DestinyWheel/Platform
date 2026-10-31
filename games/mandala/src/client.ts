@@ -282,19 +282,35 @@ const CSS = `
 .md-pick:hover:not(:disabled) { border-color:#f0d264; transform:translateY(-2px); }
 .md-pick:disabled { opacity:.45; cursor:default; }
 .md-hint { text-align:center; font-size:12px; color:#8b98a7; }
+.md-discard-hint { flex-basis:100%; }
+
+/* 「会抽牌、且不可撤销」的动作，先确认一下 */
+.md-confirm {
+  max-width: 520px; margin: 0 auto; width: 100%;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;
+  border:1px solid #d29922; background:rgba(210,153,34,.12);
+  border-radius:10px; padding:10px 14px;
+}
+.md-confirm-text { font-size:12px; color:#e3b341; }
 .md-result { text-align:center; font-size:16px; font-weight:700; color:#e3b341; }
 `;
+
+/** 等玩家确认的"会抽牌、且不可撤销"的动作 */
+type PendingAction =
+  | { kind: 'mountain'; card: number; mandala: number }
+  | { kind: 'discard'; cards: number[] };
 
 interface UiState {
   selected: number | null;
   discardMode: boolean;
   discardSel: Set<number>;
+  pending: PendingAction | null;
 }
 
 let context: GameClientContext | null = null;
 let root: HTMLElement | null = null;
 let snapshot: ClientSnapshot | null = null;
-let ui: UiState = { selected: null, discardMode: false, discardSel: new Set() };
+let ui: UiState = { selected: null, discardMode: false, discardSel: new Set(), pending: null };
 
 /** 结算时"刚被拿空"的格子，用来播一次散开动画 */
 const ghosts = new Map<string, { count: number; at: number }>();
@@ -529,6 +545,25 @@ function render(): void {
       ? `<div class="md-result">🏆 ${view.ranking[0]!.map(nameOf).join('、')} 获胜</div>${scoreboard(data)}`
       : '';
 
+  // 弃牌只能同色：选中的牌颜色一致才允许确认（服务端也会拦，这里先挡住）
+  const discardColors = new Set(
+    [...ui.discardSel].map((index) => me?.hand[index]).filter((color) => color !== undefined),
+  );
+  const canDiscard = ui.discardSel.size > 0 && discardColors.size <= 1;
+
+  const confirmText = ui.pending
+    ? ui.pending.kind === 'mountain'
+      ? '打高山会抽牌，抽到的牌进了手牌，这一步就不能撤销了'
+      : `弃 ${ui.pending.cards.length} 张会补抽同样张数，抽完这一步就不能撤销了`
+    : '';
+  const confirmHtml = ui.pending
+    ? `<div class="md-confirm">
+         <span class="md-confirm-text">${confirmText}</span>
+         <button class="md-btn primary" data-action="confirm-yes">确定</button>
+         <button class="md-btn" data-action="confirm-no">取消</button>
+       </div>`
+    : '';
+
   const actionsHtml = view.finished
     ? ''
     : `<div class="md-actions">
@@ -540,10 +575,15 @@ function render(): void {
         </button>
         ${
           ui.discardMode
-            ? `<button class="md-btn primary" data-action="confirm-discard" ${ui.discardSel.size > 0 ? '' : 'disabled'}>确认弃 ${ui.discardSel.size} 张</button>`
+            ? `<button class="md-btn primary" data-action="confirm-discard" ${canDiscard ? '' : 'disabled'}>确认弃 ${ui.discardSel.size} 张</button>`
             : ''
         }
         <button class="md-btn" data-action="end-turn" ${canAct ? '' : 'disabled'}>结束回合</button>
+        ${
+          ui.discardMode
+            ? `<div class="md-hint md-discard-hint">弃牌只能选同一种颜色：弃几张补几张，混色不行</div>`
+            : ''
+        }
       </div>`;
 
   const turnHint = view.finished
@@ -583,6 +623,7 @@ function render(): void {
         ${me ? riverHtml(me, '我的长河') : ''}
       </div>
       <div class="md-hand">${handHtml}</div>
+      ${confirmHtml}
       ${actionsHtml}
     </div>
   `;
@@ -664,8 +705,15 @@ function onClick(event: MouseEvent): void {
   if (cardEl) {
     const index = Number(cardEl.dataset.card);
     if (ui.discardMode) {
-      if (ui.discardSel.has(index)) ui.discardSel.delete(index);
-      else ui.discardSel.add(index);
+      const hand = data.you?.hand ?? [];
+      if (ui.discardSel.has(index)) {
+        ui.discardSel.delete(index);
+      } else {
+        // 只能弃同色：点了别的颜色，就把它当成"改成弃这一色"
+        const first = [...ui.discardSel][0];
+        if (first !== undefined && hand[first] !== hand[index]) ui.discardSel.clear();
+        ui.discardSel.add(index);
+      }
     } else {
       ui.selected = ui.selected === index ? null : index;
     }
@@ -676,9 +724,13 @@ function onClick(event: MouseEvent): void {
   const zoneEl = target.closest<HTMLElement>('.md-zone.can');
   if (zoneEl && ui.selected !== null) {
     const mandala = Number(zoneEl.dataset.mandala);
-    const type = zoneEl.dataset.play === 'mountain' ? 'playMountain' : 'playField';
-    context?.send({ type, payload: { card: ui.selected, mandala } });
-    ui.selected = null;
+    if (zoneEl.dataset.play === 'mountain') {
+      // 打高山会抽牌，而且抽完不能撤销 → 先问一句
+      ui.pending = { kind: 'mountain', card: ui.selected, mandala };
+    } else {
+      context?.send({ type: 'playField', payload: { card: ui.selected, mandala } });
+      ui.selected = null;
+    }
     render();
     return;
   }
@@ -698,11 +750,27 @@ function onClick(event: MouseEvent): void {
     ui.discardMode = !ui.discardMode;
     ui.discardSel.clear();
     ui.selected = null;
+    ui.pending = null;
   } else if (action === 'confirm-discard') {
+    // 这里只是把选择挂起来，真正发出去要再点一次「确定」
     const cards = [...ui.discardSel].sort((a, b) => a - b);
-    if (cards.length > 0) context?.send({ type: 'discard', payload: { cards } });
-    ui.discardMode = false;
-    ui.discardSel.clear();
+    if (cards.length > 0) ui.pending = { kind: 'discard', cards };
+  } else if (action === 'confirm-yes' && ui.pending) {
+    const pending = ui.pending;
+    ui.pending = null;
+    if (pending.kind === 'mountain') {
+      context?.send({
+        type: 'playMountain',
+        payload: { card: pending.card, mandala: pending.mandala },
+      });
+      ui.selected = null;
+    } else {
+      context?.send({ type: 'discard', payload: { cards: pending.cards } });
+      ui.discardMode = false;
+      ui.discardSel.clear();
+    }
+  } else if (action === 'confirm-no') {
+    ui.pending = null;
   } else if (action === 'pick') {
     const color = Number(button.dataset.color);
     context?.send({ type: 'pickColor', payload: { color } });
@@ -713,7 +781,7 @@ function onClick(event: MouseEvent): void {
 function mount(ctx: GameClientContext): void {
   ensureStyle();
   context = ctx;
-  ui = { selected: null, discardMode: false, discardSel: new Set() };
+  ui = { selected: null, discardMode: false, discardSel: new Set(), pending: null };
   ghosts.clear();
 
   root = document.createElement('div');

@@ -266,32 +266,40 @@ test('邀请码/房间码：长度对、字符集不含看错的 0 O 1 I L', () 
 
 /* ------------------------------ 曼荼罗规则 ------------------------------ */
 
+/** 造一个"轮到 p1、手里是这手牌"的局面，直接调插件的 validate */
+function mandalaProbe(hand: number[]) {
+  const created = createInitialState(mandala, {
+    players: ['p1', 'p2'],
+    options: {},
+    seed: 7,
+    now: 1_700_000_000_000,
+  } as never) as { state: Record<string, unknown> };
+
+  const state = created.state as {
+    players: string[];
+    hands: Record<string, number[]>;
+    turn: number;
+    mandalas: { fields: Record<number, number>[]; mountain: Record<number, number> }[];
+  };
+  const me = state.players[0]!;
+  state.hands[me] = [...hand];
+  state.turn = 0;
+
+  const validate = (type: 'playMountain' | 'playField' | 'discard', payload: unknown) =>
+    mandala.actions[type]!.validate!(state as never, { type, payload } as never, {
+      playerId: me,
+    } as never);
+
+  return { state, me, validate };
+}
+
 test('曼荼罗：打高山也要避开两个原野里已有的颜色', () => {
   // 曾经把这条规则写进介绍时写成了"任何颜色都能进高山"——代码一直是对的，
   // 但那条错误描述说明这个点值得钉死：高山的合法性取决于两个原野。
   const probe = (fields: Record<number, number>[], card: number) => {
-    const created = createInitialState(mandala, {
-      players: ['p1', 'p2'],
-      options: {},
-      seed: 7,
-      now: 1_700_000_000_000,
-    } as never) as { state: Record<string, unknown> };
-    const state = created.state as {
-      players: string[];
-      hands: Record<string, number[]>;
-      turn: number;
-      mandalas: unknown[];
-    };
-    const me = state.players[0]!;
-    state.hands[me] = [1, 2];
-    state.turn = 0;
+    const { state, validate } = mandalaProbe([1, 2]);
     state.mandalas[0] = { fields: [fields[0] ?? {}, fields[1] ?? {}], mountain: {} };
-
-    return mandala.actions.playMountain!.validate!(
-      state as never,
-      { type: 'playMountain', payload: { card, mandala: 0 } } as never,
-      { playerId: me } as never,
-    );
+    return validate('playMountain', { card, mandala: 0 });
   };
 
   assert.deepEqual(probe([{}, {}], 0), { ok: true }, '两个原野都空时，颜色可以进高山');
@@ -306,5 +314,45 @@ test('曼荼罗：打高山也要避开两个原野里已有的颜色', () => {
     '对方原野有这个颜色，同样不能打高山',
   );
   assert.deepEqual(probe([{ 1: 1 }, {}], 1), { ok: true }, '换成别的颜色照样能打');
+});
+
+test('曼荼罗：弃牌只能弃同一种颜色', () => {
+  const probe = (hand: number[], cards: number[]) => mandalaProbe(hand).validate('discard', { cards });
+
+  assert.deepEqual(probe([1, 1, 2], [0, 1]), { ok: true }, '同色两张可以一起弃');
+  assert.deepEqual(probe([1, 1, 2], [0]), { ok: true }, '单张当然可以');
+  assert.deepEqual(
+    probe([1, 1, 2], [0, 2]),
+    { ok: false, reason: 'discard.same.color' },
+    '一红一黄混着弃不行',
+  );
+  assert.deepEqual(
+    probe([1, 1, 2], [0, 1, 2]),
+    { ok: false, reason: 'discard.same.color' },
+    '混色即使张数对也不行',
+  );
+});
+
+test('曼荼罗：抽过牌的动作不能撤销', () => {
+  // 不限时的房间里换手不会发生，撤销栈只有靠动作自己清——这里就测这个
+  const play = (type: 'playField' | 'playMountain' | 'discard', payload: unknown) => {
+    const { state, me } = mandalaProbe([1, 2, 3]);
+    (state as unknown as { untimed: boolean }).untimed = true;
+    state.mandalas[0] = { fields: [{}, {}], mountain: {} };
+    mandala.actions[type]!.reduce!(state as never, { type, payload } as never, {
+      playerId: me,
+      emit: () => undefined,
+      goTo: () => undefined,
+    } as never);
+    return (state as unknown as { undo: string[] }).undo;
+  };
+
+  assert.equal(play('playField', { card: 0, mandala: 0 }).length, 1, '打原野不抽牌，可以撤销');
+  assert.equal(
+    play('playMountain', { card: 0, mandala: 0 }).length,
+    0,
+    '打高山抽了牌，撤销栈必须清空',
+  );
+  assert.equal(play('discard', { cards: [0] }).length, 0, '弃牌抽了牌，撤销栈必须清空');
 });
 

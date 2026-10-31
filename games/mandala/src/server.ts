@@ -297,7 +297,9 @@ const playMountain: ActionDef<MandalaState> = {
   reduce(state, action, ctx) {
     const { card, mandala } = action.payload as { card: number; mandala: number };
     const playerId = ctx.playerId;
-    pushUndo(state);
+    // 打高山会抽牌：抽到的牌已经进了手牌，这一步就不能撤销——
+    // 能撤的话，撤销后换个动作，等于免费看了牌堆顶三张。
+    state.undo = [];
     const hand = state.hands[playerId]!;
     const color = hand[card]!;
 
@@ -378,12 +380,17 @@ const discard: ActionDef<MandalaState> = {
     if (cards.some((index) => index < 0 || index >= hand.length)) {
       return { ok: false, reason: 'card.not.in.hand' };
     }
+    // 只能弃同一种颜色：一弃一补，混色等于白嫖换牌
+    if (new Set(cards.map((index) => hand[index]!)).size > 1) {
+      return { ok: false, reason: 'discard.same.color' };
+    }
     return { ok: true };
   },
   reduce(state, action, ctx) {
     const { cards } = action.payload as { cards: number[] };
     const playerId = ctx.playerId;
-    pushUndo(state);
+    // 弃牌会抽牌，同样不能撤销（理由和打高山一样）
+    state.undo = [];
     const hand = state.hands[playerId]!;
 
     const sorted = [...cards].sort((a, b) => b - a);

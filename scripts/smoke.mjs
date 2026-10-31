@@ -529,6 +529,8 @@ mandalaBob.send({ t: 'subscribe', tableId: mandalaTable });
 
 const opened = await waitFor(mandalaAlice, (s) => s.status === 'playing', '曼荼罗开局');
 const openedData = opened.view.data;
+/** 曼荼罗的版本号会随发版变，别写死 */
+const mandalaVersion = opened.gameVersion;
 
 assert.ok(Array.isArray(openedData.you?.hand), '自己应该看得到手牌');
 assert.equal(openedData.you.hand.length, 6, '起始手牌应为 6 张');
@@ -607,7 +609,7 @@ assert.equal(
 console.log(`✓ 曼荼罗回放 ${mandalaReplay.replay.steps.length} 步，且不含手牌内容`);
 
 // 前端产物也要是能加载的 ESM
-const mandalaClientRes = await fetch(`${server2.base}/plugins/mandala/0.1.0/client.js`);
+const mandalaClientRes = await fetch(`${server2.base}/plugins/mandala/${mandalaVersion}/client.js`);
 assert.equal(mandalaClientRes.status, 200, '曼荼罗前端产物应可访问');
 const mandalaClientCode = await mandalaClientRes.text();
 const mandalaClientFile = path.join(workDir, 'mandala-client.mjs');
@@ -631,7 +633,10 @@ assert.ok(
 );
 assert.ok(!gc.loaded.includes('dice@0.1.0'), '卸载后不应还留在内存里');
 assert.ok(gc.loaded.includes('dice@0.2.0'), 'active 版本不应被卸载');
-assert.ok(gc.loaded.includes('mandala@0.1.0'), '有进行中牌桌的版本不应被卸载');
+assert.ok(
+  gc.loaded.includes(`mandala@${mandalaVersion}`),
+  '有进行中牌桌的版本不应被卸载',
+);
 console.log(`✓ 回收：卸载 ${gc.released.join(', ')}；内存里剩 ${gc.loaded.join(', ')}`);
 
 // 老桌的回放会按需把 0.1.0 重新加载回来
@@ -783,7 +788,6 @@ const calmOpened = await waitFor(calmWs, (s) => s.status === 'playing', '不限�
 assert.equal(calmOpened.deadlineAt, null, '不限时房间不应有截止时间');
 console.log('✓ 不限时房间没有截止时间');
 
-const handBefore = calmOpened.view.data.you.hand.length;
 const mountainMove = calmOpened.legalMoves.find((move) => move.type === 'playMountain');
 assert.ok(mountainMove, '应该有打到高山的合法动作');
 
@@ -795,14 +799,32 @@ calmWs.send({
 });
 const afterPlay = await waitFor(calmWs, (s) => s.seq > calmOpened.seq, '打高山生效');
 assert.equal(afterPlay.activePlayer, alice.user.id, '不限时房间不应自动换手');
-assert.ok(afterPlay.view.data.undoCount > 0, '应记录可撤销步数');
-console.log(`✓ 打高山后仍轮到自己（可撤销 ${afterPlay.view.data.undoCount} 步）`);
+assert.equal(afterPlay.view.data.undoCount, 0, '打高山抽了牌，这一步不能撤销');
+console.log('✓ 打高山后仍轮到自己，但抽过牌，撤销栈被清空');
+
+// 打原野不抽牌，仍然可以撤销
+const fieldMove = afterPlay.legalMoves.find((move) => move.type === 'playField');
+assert.ok(fieldMove, '应该有打原野的合法动作');
+
+calmWs.send({
+  t: 'action',
+  tableId: calmTable,
+  type: fieldMove.type,
+  payload: fieldMove.payload,
+});
+const afterField = await waitFor(calmWs, (s) => s.seq > afterPlay.seq, '打原野生效');
+assert.equal(afterField.view.data.undoCount, 1, '打原野不抽牌，可以撤销');
+const handAfterField = afterField.view.data.you.hand.length;
 
 calmWs.send({ t: 'action', tableId: calmTable, type: 'undo', payload: {} });
-const afterUndo = await waitFor(calmWs, (s) => s.seq > afterPlay.seq, '撤销生效');
-assert.equal(afterUndo.view.data.you.hand.length, handBefore, '撤销后手牌应恢复原状');
+const afterUndo = await waitFor(calmWs, (s) => s.seq > afterField.seq, '撤销生效');
+assert.equal(
+  afterUndo.view.data.you.hand.length,
+  handAfterField + 1,
+  '撤销后手牌应回到打原野之前',
+);
 assert.equal(afterUndo.view.data.undoCount, 0, '撤销栈应被清空');
-console.log('✓ 撤销成功，手牌恢复到出牌前');
+console.log('✓ 打原野可以撤销，手牌恢复；打高山不行');
 
 calmWs.send({ t: 'action', tableId: calmTable, type: 'endTurn', payload: {} });
 const afterEnd = await waitFor(calmWs, (s) => s.seq > afterUndo.seq, '结束回合生效');
