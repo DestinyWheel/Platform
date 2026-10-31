@@ -22,6 +22,7 @@ export function Lobby({
   onAdmin,
   onUser,
   onGame,
+  onDocs,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
@@ -30,6 +31,7 @@ export function Lobby({
   onAdmin: () => void;
   onUser: () => void;
   onGame: (gameId: string) => void;
+  onDocs: () => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [mine, setMine] = useState<TableSummary[]>([]);
@@ -179,13 +181,15 @@ export function Lobby({
                     {table.code ? <span className="room-code">{table.code}</span> : null}
                   </div>
                   <div className="muted small">
-                    {table.mine === 'host' ? '我是房主' : '我是玩家'} · {table.players}/
-                    {table.maxPlayers} 人 · 房主 {table.hostName}
+                    {table.mode === 'realtime' ? '即时' : '回合制'}
+                    {table.friendly ? ' · 友谊赛' : ''} · {table.mine === 'host' ? '我是房主' : '我是玩家'} ·{' '}
+                    {table.players}/{table.maxPlayers} 人 · 房主 {table.hostName}
                   </div>
                 </div>
+                {table.myTurn ? <div className="badge playing">轮到你</div> : null}
                 <div className={`badge ${table.status}`}>{STATUS_LABEL[table.status]}</div>
                 <button className="primary" onClick={() => onOpen(table.id)}>
-                  回到牌桌
+                  {table.myTurn ? '该你走了' : '回到牌桌'}
                 </button>
               </li>
             ))}
@@ -318,6 +322,13 @@ export function Lobby({
           )}
         </section>
       </div>
+
+      <footer className="footer">
+        <span>桌游平台 · 游戏以插件形式加载，加游戏不用重启</span>
+        <button className="link" onClick={onDocs}>
+          插件开发文档
+        </button>
+      </footer>
     </div>
   );
 }

@@ -106,6 +106,11 @@ const createTableSchema = z.object({
   gameId: z.string().min(1),
   maxPlayers: z.number().int().optional(),
   options: z.record(z.unknown()).optional(),
+  mode: z.enum(['realtime', 'turnbased']).optional(),
+  pace: z.string().min(1).max(8).optional(),
+  /** 每日可行动时段，UTC 当天第几分钟 */
+  windowStart: z.number().int().min(0).max(1439).nullable().optional(),
+  windowEnd: z.number().int().min(0).max(1439).nullable().optional(),
 });
 
 export interface AppOptions {
@@ -536,11 +541,25 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   });
 
   /** 随机加入：没桌就现开一张，所以一定会给你一个牌桌 */
-  app.post<{ Body: { gameId?: string } }>('/api/tables/quick-match', async (request) => {
+  app.post<{
+    Body: {
+      gameId?: string;
+      mode?: 'realtime' | 'turnbased';
+      pace?: string;
+      windowStart?: number | null;
+      windowEnd?: number | null;
+    };
+  }>('/api/tables/quick-match', async (request) => {
     const user = await requireUser(request);
     checkLimit(limits.createTable.take(user.id));
-    const gameId = typeof request.body?.gameId === 'string' ? request.body.gameId : undefined;
-    const result = await service.quickMatch(user, gameId);
+    const body = request.body ?? {};
+    const gameId = typeof body.gameId === 'string' ? body.gameId : undefined;
+    const result = await service.quickMatch(user, gameId, {
+      ...(body.mode ? { mode: body.mode } : {}),
+      ...(body.pace ? { pace: body.pace } : {}),
+      windowStart: body.windowStart ?? null,
+      windowEnd: body.windowEnd ?? null,
+    });
     metrics.inc(result.created ? 'tables.created' : 'tables.quick_matched');
     return result;
   });
@@ -811,7 +830,9 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
             ? 403
             : error.code === 'not_found'
               ? 404
-              : 400;
+              : error.code === 'already_in_realtime'
+                ? 409
+                : 400;
       return reply.code(status).send({ code: error.code, message: error.message });
     }
     if (error instanceof PluginError) {

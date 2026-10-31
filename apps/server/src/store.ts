@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { BaseState, ChatMessage, GameManifest, LogEntry, TableStatus } from '@platform/sdk';
+import type { BaseState, ChatMessage, GameManifest, LogEntry, TableMode, TableStatus } from '@platform/sdk';
 import { INVITE_CODE_LENGTH, randomCode } from './codes.js';
 import type { Db } from './db/types.js';
 
@@ -51,6 +51,19 @@ export interface TableRecord {
   seq: number;
   log: LogEntry[];
   deadlineAt: number | null;
+  /** 即时制 / 回合制 */
+  mode: TableMode;
+  /** 节奏档位（见迁移 008 的注释） */
+  pace: string;
+  /** 每步给多少毫秒；null = 不限时 */
+  turnMs: number | null;
+  /** 每日可行动时段，UTC 当天的第几分钟；null = 全天 */
+  windowStart: number | null;
+  windowEnd: number | null;
+  /** 连续超时次数，满 3 次判负 */
+  timeoutStreak: number;
+  /** 无限时长 = 友谊赛，不计分 */
+  friendly: boolean;
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
@@ -259,6 +272,13 @@ interface TableRow {
   seq: number;
   log: LogEntry[];
   deadline_at: number | null;
+  mode: string;
+  pace: string;
+  turn_ms: number | null;
+  window_start: number | null;
+  window_end: number | null;
+  timeout_streak: number;
+  friendly: boolean;
   created_at: number;
   started_at: number | null;
   finished_at: number | null;
@@ -280,6 +300,13 @@ function toRecord(row: TableRow): TableRecord {
     seq: Number(row.seq),
     log: row.log ?? [],
     deadlineAt: row.deadline_at === null ? null : Number(row.deadline_at),
+    mode: (row.mode === 'turnbased' ? 'turnbased' : 'realtime') as TableMode,
+    pace: row.pace ?? 'normal',
+    turnMs: row.turn_ms === null ? null : Number(row.turn_ms),
+    windowStart: row.window_start === null ? null : Number(row.window_start),
+    windowEnd: row.window_end === null ? null : Number(row.window_end),
+    timeoutStreak: Number(row.timeout_streak ?? 0),
+    friendly: Boolean(row.friendly),
     createdAt: Number(row.created_at),
     startedAt: row.started_at === null ? null : Number(row.started_at),
     finishedAt: row.finished_at === null ? null : Number(row.finished_at),
@@ -464,8 +491,10 @@ export class PgStore implements Store {
     await this.db.execute(
       `INSERT INTO tables
          (id, code, game_id, game_version, host_id, status, players, max_players, options,
-          state, seq, log, deadline_at, created_at, started_at, finished_at, result)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb)`,
+          state, seq, log, deadline_at, created_at, started_at, finished_at, result,
+          mode, pace, turn_ms, window_start, window_end, timeout_streak, friendly)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,
+               $18,$19,$20,$21,$22,$23,$24)`,
       [
         record.id,
         record.code,
@@ -484,6 +513,13 @@ export class PgStore implements Store {
         record.startedAt,
         record.finishedAt,
         record.result === null ? null : JSON.stringify(record.result),
+        record.mode,
+        record.pace,
+        record.turnMs,
+        record.windowStart,
+        record.windowEnd,
+        record.timeoutStreak,
+        record.friendly,
       ],
     );
   }
@@ -502,7 +538,7 @@ export class PgStore implements Store {
         `UPDATE tables SET
            players = $1::jsonb, status = $2, state = $3::jsonb, seq = $4, log = $5::jsonb,
            deadline_at = $6, started_at = $7, finished_at = $8, result = $9::jsonb,
-           host_id = $12
+           host_id = $12, timeout_streak = $13
          WHERE id = $10 AND seq = $11
          RETURNING seq`,
         [
@@ -518,6 +554,7 @@ export class PgStore implements Store {
           table.id,
           expectedSeq,
           table.hostId,
+          table.timeoutStreak,
         ],
       );
 

@@ -20,6 +20,7 @@ import type { PluginHost } from './pluginHost/host.js';
 import type { PluginRuntime } from './pluginHost/runtime.js';
 import { hashState } from './hash.js';
 import { computeDeltas, DEFAULT_RATING } from './elo.js';
+import { alignToWindow, realtimeTurnMs, turnPaceMs } from './schedule.js';
 import type { Presence } from './presence.js';
 import type { ActionLog, RecentMatch, Store, TableRecord, UserRecord } from './store.js';
 
@@ -44,6 +45,13 @@ export interface CreateTableInput {
   gameId: string;
   maxPlayers?: number;
   options?: Record<string, unknown>;
+  /** 即时制 / 回合制；不填按插件声明的第一个 */
+  mode?: 'realtime' | 'turnbased';
+  /** 节奏档位；不填用默认 */
+  pace?: string;
+  /** 每日可行动时段（UTC 分钟）；只有回合制用得上 */
+  windowStart?: number | null;
+  windowEnd?: number | null;
 }
 
 /** 一次写操作的结果：write=false 表示这次不改库（例如并发下已被别人推进） */
@@ -128,7 +136,32 @@ export class TableService {
     const active = this.host.activeFor(input.gameId);
     if (!active) throw new ServiceError('unknown_game', `游戏「${input.gameId}」当前不可用（可能已被管理员禁用）`);
 
-    const { min, max } = active.manifest.players;
+    const manifest = active.manifest;
+    const mode = input.mode ?? manifest.modes[0] ?? 'realtime';
+    if (!manifest.modes.includes(mode)) {
+      throw new ServiceError('mode_not_supported', `这个游戏不支持「${mode === 'realtime' ? '即时' : '回合制'}」模式`);
+    }
+
+    // 即时制：一个人同一时间只能占一个实时房（等待中的也算，否则能挂十个坑）
+    if (mode === 'realtime') {
+      const mine = await this.store.listMyTables(user.id, 50);
+      const busy = mine.find(
+        (table) => table.mode === 'realtime' && (table.status === 'lobby' || table.status === 'playing'),
+      );
+      if (busy) {
+        throw new ServiceError(
+          'already_in_realtime',
+          `你已经在即时房间里了${busy.code ? `（${busy.code}）` : ''}，先打完或认负退出`,
+        );
+      }
+    }
+
+    const turnMs =
+      mode === 'realtime' ? realtimeTurnMs(manifest, input.pace ?? 'normal') : turnPaceMs(input.pace ?? '24');
+    const windowStart = mode === 'turnbased' ? (input.windowStart ?? null) : null;
+    const windowEnd = mode === 'turnbased' ? (input.windowEnd ?? null) : null;
+
+    const { min, max } = manifest.players;
     const requested = input.maxPlayers ?? max;
     const maxPlayers = Math.max(min, Math.min(max, Math.trunc(requested)));
 
@@ -136,7 +169,7 @@ export class TableService {
     const record: TableRecord = {
       id: randomUUID(),
       code: await this.allocateCode(),
-      gameId: active.manifest.id,
+      gameId: manifest.id,
       // ★ 建桌这一刻锁定版本：之后发新版不会影响这一桌
       gameVersion: active.version,
       hostId: user.id,
@@ -148,6 +181,14 @@ export class TableService {
       seq: 0,
       log: [],
       deadlineAt: null,
+      mode,
+      pace: input.pace ?? (mode === 'realtime' ? 'normal' : '24'),
+      turnMs,
+      windowStart,
+      windowEnd,
+      timeoutStreak: 0,
+      // 不限时 = 友谊赛：不计 Elo、不记战绩，这样人卡着也不怕
+      friendly: turnMs === null,
       createdAt: now,
       startedAt: null,
       finishedAt: null,
@@ -211,12 +252,18 @@ export class TableService {
    * 随机加入：找一张还在等人、还有空位的桌。
    * 找不到就直接开一张——否则按钮点下去毫无反应，是最差的手感。
    */
-  async quickMatch(user: UserRecord, gameId?: string): Promise<{ id: string; created: boolean }> {
+  async quickMatch(
+    user: UserRecord,
+    gameId?: string,
+    settings: Pick<CreateTableInput, 'mode' | 'pace' | 'windowStart' | 'windowEnd'> = {},
+  ): Promise<{ id: string; created: boolean }> {
     const target = gameId ?? this.host.listActive()[0]?.id;
     if (!target) throw new ServiceError('no_games', '还没有可玩的游戏');
 
+    // 只在同模式的空桌里找：即时制的人不该被塞进一张回合制的桌
+    const wantedMode = settings.mode;
     const open = await this.store.findOpenTable(target);
-    if (open) {
+    if (open && (!wantedMode || open.mode === wantedMode)) {
       if (open.players.some((player) => player.id === user.id)) {
         return { id: open.id, created: false };
       }
@@ -229,7 +276,7 @@ export class TableService {
       }
     }
 
-    return { id: await this.createTable(user, { gameId: target }), created: true };
+    return { id: await this.createTable(user, { gameId: target, ...settings }), created: true };
   }
 
   /**
@@ -349,6 +396,14 @@ export class TableService {
       seq: 0,
       log: [],
       deadlineAt: null,
+      // 再来一局沿用同样的节奏设置
+      mode: table.mode,
+      pace: table.pace,
+      turnMs: table.turnMs,
+      windowStart: table.windowStart,
+      windowEnd: table.windowEnd,
+      timeoutStreak: 0,
+      friendly: table.friendly,
       createdAt: now,
       startedAt: null,
       finishedAt: null,
@@ -445,6 +500,8 @@ export class TableService {
 
       table.state = applied.state as BaseState;
       table.seq += 1;
+      // 人回来了并真的动了一步：连续超时计数清零
+      table.timeoutStreak = 0;
       this.appendLogs(table, applied.effects, now);
       this.settle(table, applied.activePlayer, now);
 
@@ -490,6 +547,40 @@ export class TableService {
           table.state = applied.state as BaseState;
           table.seq += 1;
           this.appendLogs(table, applied.effects, at);
+
+          // 连续超时计数：谁掉线谁负责。三次就判负，免得一桌人等他到天荒地老
+          const slowpoke = applied.actor;
+          if (slowpoke && table.players.some((player) => player.id === slowpoke && !player.bot)) {
+            table.timeoutStreak += 1;
+          }
+          if (slowpoke && table.timeoutStreak >= 3) {
+            const others = table.players.filter((player) => player.id !== slowpoke).map((player) => [player.id]);
+            table.result = { ranking: [...others, [slowpoke]], reason: 'forfeit', by: slowpoke };
+            const loser = table.players.find((player) => player.id === slowpoke);
+            if (loser) loser.forfeited = true;
+            table.status = 'finished';
+            table.finishedAt = at;
+            table.deadlineAt = null;
+            table.seq += 1;
+            this.pushLogs(
+              table.log,
+              [{ type: 'log', key: 'table.timeoutForfeit', args: { name: loser?.name ?? '' } }],
+              at,
+            );
+            return {
+              write: true,
+              result: undefined,
+              activePlayer: null,
+              log: {
+                actor: applied.actor,
+                kind: 'timeout',
+                action: applied.action,
+                effects: applied.effects,
+                stateHash: hashState(applied.state),
+              },
+            };
+          }
+
           this.settle(table, applied.activePlayer, at);
 
           return {
@@ -577,6 +668,10 @@ export class TableService {
       legalMoves,
       activePlayer,
       deadlineAt: table.deadlineAt,
+      mode: table.mode,
+      pace: table.pace,
+      friendly: table.friendly,
+      timeoutStreak: table.timeoutStreak,
       log: table.log.filter((entry) => entry.to === 'all' || entry.to.includes(viewerId)).slice(-80),
       chat,
       viewers: this.presence.viewers(table.id),
@@ -608,6 +703,16 @@ export class TableService {
       maxPlayers: table.maxPlayers,
       hostName: host?.name ?? '—',
       createdAt: table.createdAt,
+      mode: table.mode,
+      pace: table.pace,
+      friendly: table.friendly,
+      deadlineAt: table.deadlineAt,
+      myTurn: Boolean(
+        viewerId &&
+          table.state &&
+          table.status === 'playing' &&
+          table.players[table.state.turn]?.id === viewerId,
+      ),
       ...(viewerId
         ? { mine: seated ? (seated.id === table.hostId ? ('host' as const) : ('player' as const)) : ('spectator' as const) }
         : {}),
@@ -753,6 +858,7 @@ export class TableService {
 
     const humans = table.players.filter((player) => !player.bot);
     if (humans.length < 2) return;
+    if (table.friendly) return; // 友谊赛（无限时长档）：不计分、不记战绩
     if (await this.store.hasMatchResults(table.id)) return;
 
     const rankOf = new Map<string, number>();
@@ -873,15 +979,14 @@ export class TableService {
       return;
     }
 
-    // turnMs === 0 表示不限时房间：不设截止时间，也就不会被超时托管
-    if (table.options.turnMs === 0) {
+    // 不限时（友谊赛）：不设截止时间，也就不会被超时托管
+    if (!table.turnMs) {
       table.deadlineAt = null;
       return;
     }
 
-    const raw = table.options.turnMs;
-    const turnMs = typeof raw === 'number' && raw >= 5_000 && raw <= 600_000 ? raw : DEFAULT_TURN_MS;
-    table.deadlineAt = now + turnMs;
+    // 回合制还要落在「每日可行动时段」里：到点如果是深夜，顺延到下一个窗口
+    table.deadlineAt = alignToWindow(now + table.turnMs, table.windowStart, table.windowEnd);
   }
 
   private settle(table: TableRecord, activePlayer: string | null, now: number): void {

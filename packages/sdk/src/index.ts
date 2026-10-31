@@ -52,6 +52,12 @@ export interface GameManifest {
    * "玩家需要知道的变化"，不是 changelog。
    */
   notes?: string[];
+  /**
+   * 即时制每步的时间限制（秒）。插件自己定，因为不同游戏一步的思考量差很多。
+   * 不填就用平台默认：快 20 / 中 45 / 慢 90。除此之外还有一个「无限」档，
+   * 不自动替人走，那种桌按友谊赛处理（不计分）。
+   */
+  realtime?: { fast: number; normal: number; slow: number };
 }
 
 /* ------------------------------------------------------------------ */
@@ -292,6 +298,13 @@ export interface TableSnapshot {
   legalMoves: AnyAction[];
   activePlayer: PlayerId | null;
   deadlineAt: number | null;
+  /** 这张桌的节奏：即时 / 回合制 */
+  mode: TableMode;
+  pace: string;
+  /** 友谊赛（无限时长档）：不计 Elo、不记战绩 */
+  friendly: boolean;
+  /** 连续超时次数，满 3 次判负 */
+  timeoutStreak: number;
   log: LogEntry[];
   /** 最近若干条聊天 */
   chat: ChatMessage[];
@@ -311,6 +324,8 @@ export interface VersionNotice {
   notes: string[];
 }
 
+export type TableMode = 'realtime' | 'turnbased';
+
 export interface TableSummary {
   id: string;
   gameId: string;
@@ -323,6 +338,15 @@ export interface TableSummary {
   createdAt: number;
   /** 我在这张桌里的角色，用于「我的对局」列表 */
   mine?: 'host' | 'player' | 'spectator';
+  mode: TableMode;
+  /** 节奏档位：即时 fast|normal|slow|none；回合 24|12|8|4|2|1|2d|none */
+  pace: string;
+  /** 友谊赛：无限时长档不计分 */
+  friendly: boolean;
+  /** 下一步到期时间；null = 不限时 */
+  deadlineAt: number | null;
+  /** 现在轮到我动（回合制列表排序用） */
+  myTurn: boolean;
 }
 
 /* ---------------- 管理端（只有管理员能拿到） ---------------- */

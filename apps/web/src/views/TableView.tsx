@@ -187,13 +187,18 @@ export function TableView({
   return (
     <div className="table-page">
       <header className="topbar">
-        <button className="ghost" onClick={onExit}>
-          ← 大厅
-        </button>
+        {/* 即时制没有"回大厅"：人走了这局就没人替他打了，退出等于认负 */}
+        {snapshot.mode === 'realtime' ? null : (
+          <button className="ghost" onClick={onExit}>
+            ← 大厅
+          </button>
+        )}
         <div className="title">
           {snapshot.gameName}
           <span className="muted version">v{snapshot.gameVersion}</span>
           {snapshot.code ? <span className="room-code">{snapshot.code}</span> : null}
+          <span className="badge">{snapshot.mode === 'realtime' ? '即时' : '回合制'}</span>
+          {snapshot.friendly ? <span className="badge">友谊赛 · 不计分</span> : null}
         </div>
         <div className={`badge ${snapshot.status}`}>{STATUS_LABEL[snapshot.status]}</div>
         {remainingMs !== null ? (

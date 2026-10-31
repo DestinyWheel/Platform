@@ -59,14 +59,20 @@ async function startServer(db, extra = {}) {
 function makeApi(base) {
   return async function api(pathname, { token, method = 'GET', body, raw } = {}) {
     const headers = {};
-    if (body !== undefined) headers['content-type'] = 'application/json';
+    // 冒烟里建桌默认走「回合制 + 每天一动」：测试期间不会超时，也不占"即时房间"名额
+    const payload =
+      pathname === '/tables' && method === 'POST' && body && !body.mode
+        ? { mode: 'turnbased', pace: '1', ...body }
+        : body;
+
+    if (payload !== undefined) headers['content-type'] = 'application/json';
     if (raw !== undefined) headers['content-type'] = 'application/zip';
     if (token) headers.authorization = `Bearer ${token}`;
 
     const response = await fetch(`${base}/api${pathname}`, {
       method,
       headers,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
       ...(raw !== undefined ? { body: raw } : {}),
     });
     const json = await response.json().catch(() => ({}));
@@ -117,9 +123,11 @@ async function waitFor(client, predicate, label, timeoutMs = 8000) {
 
 /** 建桌限流在阶段八被故意打满过，后面的用例要能等一下令牌补充 */
 async function createTableWithRetry(api, token, body, attempts = 8) {
+  // 默认回合制、每天一动：测试期间不会超时，也不会撞"一人一个即时房"的限制
+  const withDefaults = { mode: 'turnbased', pace: '1', ...body };
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await api('/tables', { token, method: 'POST', body });
+      return await api('/tables', { token, method: 'POST', body: withDefaults });
     } catch (error) {
       if (error.status !== 429) throw error;
       await sleep(1200);
@@ -483,7 +491,7 @@ console.log('\n▶ 阶段五：超时兜底');
 const { id: timeoutTable } = await api2('/tables', {
   token: alice.token,
   method: 'POST',
-  body: { gameId: 'dice', maxPlayers: 2, options: { turnMs: 5000 } },
+  body: { gameId: 'dice', maxPlayers: 2, mode: 'realtime', pace: 'fast' },
 });
 await api2(`/tables/${timeoutTable}/join`, { token: bob.token, method: 'POST' });
 await api2(`/tables/${timeoutTable}/start`, { token: alice.token, method: 'POST' });
@@ -775,7 +783,10 @@ console.log('\n▶ 阶段十：回合内撤销 / 不限时房间');
 const { id: calmTable } = await createTableWithRetry(api2, alice.token, {
   gameId: 'mandala',
   maxPlayers: 2,
-  options: { untimed: true, turnMs: 0 },
+  mode: 'turnbased',
+  pace: 'none',
+  // untimed 是游戏规则变体（不自动换手），和平台计时是两件事
+  options: { untimed: true },
 });
 await api2(`/tables/${calmTable}/join`, { token: bob.token, method: 'POST' });
 await api2(`/tables/${calmTable}/start`, { token: alice.token, method: 'POST' });
@@ -1218,6 +1229,25 @@ await expectFailure(
   '服务端用了 Date.now',
 );
 console.log('✓ 服务端代码里出现 Date.now() 会被发布流水线挡下（客户端不受这条约束）');
+
+/* ------------------------------ 即时房间限制 ------------------------------ */
+
+const realtimeBody = { gameId: 'dice', maxPlayers: 2, mode: 'realtime', pace: 'slow' };
+// 用一个全新账号：别人身上可能还挂着之前建的即时桌
+const realtimeProbe = await registerUser(api2, '即时测试', 'rt-solo-123456');
+const { id: realtimeOne } = await api2('/tables', {
+  token: realtimeProbe.token,
+  method: 'POST',
+  body: realtimeBody,
+});
+await expectFailure(
+  api2('/tables', { token: realtimeProbe.token, method: 'POST', body: realtimeBody }),
+  409,
+  'already_in_realtime',
+  '一个人同时只能占一个即时房',
+);
+await api2(`/tables/${realtimeOne}/leave`, { token: realtimeProbe.token, method: 'POST' });
+console.log('✓ 即时制：一个人同时只能占一个实时房（等待中的也算）');
 
 /* ------------------------------ 收尾 ------------------------------ */
 

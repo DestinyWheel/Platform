@@ -4,6 +4,7 @@ import { Lobby } from './views/Lobby';
 import { Admin } from './views/Admin';
 import { GameDetail } from './views/GameDetail';
 import { Login } from './views/Login';
+import { PluginDocs } from './views/PluginDocs';
 import { ReplayView } from './views/ReplayView';
 import { TableView } from './views/TableView';
 import { UserCenter } from './views/UserCenter';
@@ -14,6 +15,7 @@ type View =
   | { name: 'replay'; id: string }
   | { name: 'game'; id: string }
   | { name: 'user' }
+  | { name: 'docs' }
   | { name: 'admin' };
 
 function readHash(): View {
@@ -28,6 +30,7 @@ function readHash(): View {
 
   if (location.hash === '#/admin') return { name: 'admin' };
   if (location.hash === '#/me') return { name: 'user' };
+  if (location.hash === '#/docs') return { name: 'docs' };
 
   return { name: 'lobby' };
 }
@@ -44,7 +47,9 @@ function writeHash(view: View): void {
             ? '#/admin'
             : view.name === 'user'
               ? '#/me'
-              : '#/';
+              : view.name === 'docs'
+                ? '#/docs'
+                : '#/';
   if (location.hash !== next) history.replaceState(null, '', next);
 }
 
@@ -163,6 +168,10 @@ export function App() {
     );
   }
 
+  if (view.name === 'docs') {
+    return <PluginDocs onBack={() => navigate({ name: 'lobby' })} />;
+  }
+
   if (view.name === 'user') {
     return (
       <UserCenter
@@ -193,6 +202,7 @@ export function App() {
       onAdmin={() => navigate({ name: 'admin' })}
       onUser={() => navigate({ name: 'user' })}
       onGame={(id) => navigate({ name: 'game', id })}
+      onDocs={() => navigate({ name: 'docs' })}
       onLogout={() => {
         // 先让服务端把令牌作废（token_version +1），再清本地；
         // 失败也没关系——本地已经清掉了，服务端那份留到过期也进不来这个设备

@@ -155,8 +155,16 @@ export const api = {
 
   tables: () => request<{ tables: TableSummary[] }>('/tables'),
 
-  createTable: (input: { gameId: string; maxPlayers?: number; options?: Record<string, unknown> }) =>
-    request<{ id: string }>('/tables', { method: 'POST', body: JSON.stringify(input) }),
+  createTable: (input: {
+    gameId: string;
+    maxPlayers?: number;
+    options?: Record<string, unknown>;
+    mode?: 'realtime' | 'turnbased';
+    pace?: string;
+    /** 每日可行动时段，UTC 当天第几分钟 */
+    windowStart?: number | null;
+    windowEnd?: number | null;
+  }) => request<{ id: string }>('/tables', { method: 'POST', body: JSON.stringify(input) }),
 
   joinTable: (id: string) => request<{ ok: true }>(`/tables/${id}/join`, { method: 'POST' }),
 
@@ -164,10 +172,15 @@ export const api = {
   myTables: () => request<{ tables: TableSummary[] }>('/tables/mine'),
 
   /** 随机加入：没桌就现开一张，所以一定会给你一个牌桌 */
-  quickMatch: (gameId?: string) =>
+  quickMatch: (gameId?: string, settings?: {
+    mode?: 'realtime' | 'turnbased';
+    pace?: string;
+    windowStart?: number | null;
+    windowEnd?: number | null;
+  }) =>
     request<{ id: string; created: boolean }>('/tables/quick-match', {
       method: 'POST',
-      body: JSON.stringify(gameId ? { gameId } : {}),
+      body: JSON.stringify({ ...(gameId ? { gameId } : {}), ...(settings ?? {}) }),
     }),
 
   joinByCode: (code: string) =>
