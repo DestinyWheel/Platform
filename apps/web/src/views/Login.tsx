@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, api, type Session } from '../api';
+import { PasswordField } from '../PasswordField';
 
 type Mode = 'login' | 'register' | 'claim';
 
@@ -132,29 +133,21 @@ export function Login({
           />
         </label>
 
-        <label className="field">
-          <span>密码</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder={mode === 'login' ? '' : '至少 8 位'}
-            maxLength={128}
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          />
-        </label>
+        <PasswordField
+          label="密码"
+          value={password}
+          onChange={setPassword}
+          placeholder={mode === 'login' ? '' : '至少 8 位'}
+          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+        />
 
         {mode === 'register' ? (
-          <label className="field">
-            <span>确认密码</span>
-            <input
-              type="password"
-              value={confirm}
-              onChange={(event) => setConfirm(event.target.value)}
-              maxLength={128}
-              autoComplete="new-password"
-            />
-          </label>
+          <PasswordField
+            label="确认密码"
+            value={confirm}
+            onChange={setConfirm}
+            autoComplete="new-password"
+          />
         ) : null}
 
         {mode === 'register' && config.registration === 'code' ? (

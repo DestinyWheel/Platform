@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, type Session } from '../api';
+import { PasswordField } from '../PasswordField';
 
 /** 改密码：会作废其它设备上的登录，并把新令牌交给调用方替换本地会话 */
 export function ChangePassword({
@@ -43,35 +44,26 @@ export function ChangePassword({
         <h2>修改密码</h2>
         <p className="muted small">改完其它设备会立刻退出登录。</p>
 
-        <label className="field">
-          <span>原密码</span>
-          <input
-            type="password"
-            value={oldPassword}
-            onChange={(event) => setOldPassword(event.target.value)}
-            autoComplete="current-password"
-            autoFocus
-          />
-        </label>
-        <label className="field">
-          <span>新密码</span>
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-            placeholder="至少 8 位"
-            autoComplete="new-password"
-          />
-        </label>
-        <label className="field">
-          <span>再输一次</span>
-          <input
-            type="password"
-            value={confirm}
-            onChange={(event) => setConfirm(event.target.value)}
-            autoComplete="new-password"
-          />
-        </label>
+        <PasswordField
+          label="原密码"
+          value={oldPassword}
+          onChange={setOldPassword}
+          autoComplete="current-password"
+          autoFocus
+        />
+        <PasswordField
+          label="新密码"
+          value={newPassword}
+          onChange={setNewPassword}
+          placeholder="至少 8 位"
+          autoComplete="new-password"
+        />
+        <PasswordField
+          label="再输一次"
+          value={confirm}
+          onChange={setConfirm}
+          autoComplete="new-password"
+        />
 
         {error ? <div className="error">{error}</div> : null}
 
