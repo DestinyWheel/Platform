@@ -170,7 +170,7 @@ six-nimmt-1.3.0.zip
 ### 3.1 manifest
 
 ```ts
-// packages/sdk/src/manifest.ts
+// packages/sdk/src/index.ts
 export interface GameManifest {
   id: string;                    // 'six-nimmt'，全局唯一，不可变
   name: string;
@@ -180,11 +180,13 @@ export interface GameManifest {
   modes: ('realtime' | 'turnbased')[];
   tags: string[];
   estimatedMinutes: number;
-  entry: { server: string; client: string };
-  assets?: string[];
-  locales?: string[];
+  description?: string;          // 一句话简介，大厅卡片上显示
+  intro?: string;                // 详情页介绍：空行分段、'## ' 小标题、'- ' 条目
+  notes?: string[];              // 更新公告，新版本第一次进桌强制读一次
 }
 ```
+
+`description` 和 `intro` 是给别人看的：大厅卡片显示一句话，详情页把 `intro` 排成小标题 + 条目 + 段落。不填也能跑，只是详情页会说「这个游戏还没写介绍」。
 
 `apiVersion` 是**宿主兼容性的唯一开关**：不满足宿主当前 API 范围时，管理端标红、拒绝激活，但绝不让宿主崩溃。
 

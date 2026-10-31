@@ -246,6 +246,37 @@ input:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* 整张卡是一个按钮：点哪都能进详情 */
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.game-card:hover {
+  border-color: rgba(122, 162, 255, 0.55);
+  transform: translateY(-1px);
+}
+
+.game-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.game-blurb {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.game-more {
+  margin-top: auto;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--accent);
 }
 
 .game-name {
@@ -558,6 +589,95 @@ input:focus {
 .chat-form button {
   padding: 7px 14px;
   font-size: 13px;
+}
+
+/* ---------------- 游戏详情 ---------------- */
+
+.detail-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 36px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .detail-columns {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+}
+
+.detail-lead {
+  margin: 0 0 14px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 16px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.intro {
+  max-width: 62ch;
+  font-size: 14px;
+  line-height: 1.75;
+  color: #c9d3df;
+}
+
+.intro p {
+  margin: 0 0 14px;
+}
+
+.intro-title {
+  margin: 24px 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+
+.intro-title:first-child {
+  margin-top: 0;
+}
+
+.intro-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+}
+
+.intro-list li {
+  margin-bottom: 6px;
+}
+
+.detail-side {
+  position: sticky;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.detail-side h2 {
+  margin-bottom: 2px;
+}
+
+.detail-side .field {
+  margin-bottom: 2px;
+}
+
+button.block {
+  width: 100%;
 }
 
 /* ---------------- 战绩 / 排行榜 ---------------- */
@@ -1029,27 +1149,6 @@ select.ghost {
   /* 点一下就整段选中：复制按钮被浏览器挡了也有后路 */
   user-select: all;
   cursor: text;
-}
-
-.seat-picker {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
-}.seat-picker select {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 9px;
-  padding: 6px 10px;
-  font: inherit;
-  margin: 0;
-}
-
-.game-actions {
-  display: flex;
-  gap: 8px;
 }
 
 button.danger {

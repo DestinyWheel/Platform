@@ -38,6 +38,13 @@ export interface GameManifest {
   modes: ('realtime' | 'turnbased')[];
   tags: string[];
   estimatedMinutes: number;
+  /** 一句话简介：大厅卡片上显示，没有就只显示人数和时长 */
+  description?: string;
+  /**
+   * 详情页的游戏介绍。纯文本，空行分段；
+   * 以 "- " 开头的连续行渲染成条目。
+   */
+  intro?: string;
   /**
    * 这一版的更新内容（给人看的一两句话）。
    *

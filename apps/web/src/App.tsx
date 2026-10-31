@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api, loadSession, saveSession, setAuthToken, setUnauthorizedHandler, type Session } from './api';
 import { Lobby } from './views/Lobby';
 import { Admin } from './views/Admin';
+import { GameDetail } from './views/GameDetail';
 import { Login } from './views/Login';
 import { ReplayView } from './views/ReplayView';
 import { TableView } from './views/TableView';
@@ -11,6 +12,7 @@ type View =
   | { name: 'lobby' }
   | { name: 'table'; id: string }
   | { name: 'replay'; id: string }
+  | { name: 'game'; id: string }
   | { name: 'user' }
   | { name: 'admin' };
 
@@ -20,6 +22,9 @@ function readHash(): View {
 
   const replay = /^#\/replay\/([\w-]+)$/.exec(location.hash);
   if (replay?.[1]) return { name: 'replay', id: replay[1] };
+
+  const game = /^#\/game\/([\w-]+)$/.exec(location.hash);
+  if (game?.[1]) return { name: 'game', id: game[1] };
 
   if (location.hash === '#/admin') return { name: 'admin' };
   if (location.hash === '#/me') return { name: 'user' };
@@ -33,11 +38,13 @@ function writeHash(view: View): void {
       ? `#/table/${view.id}`
       : view.name === 'replay'
         ? `#/replay/${view.id}`
-        : view.name === 'admin'
-          ? '#/admin'
-          : view.name === 'user'
-            ? '#/me'
-            : '#/';
+        : view.name === 'game'
+          ? `#/game/${view.id}`
+          : view.name === 'admin'
+            ? '#/admin'
+            : view.name === 'user'
+              ? '#/me'
+              : '#/';
   if (location.hash !== next) history.replaceState(null, '', next);
 }
 
@@ -146,6 +153,16 @@ export function App() {
     );
   }
 
+  if (view.name === 'game') {
+    return (
+      <GameDetail
+        gameId={view.id}
+        onBack={() => navigate({ name: 'lobby' })}
+        onOpen={(id) => navigate({ name: 'table', id })}
+      />
+    );
+  }
+
   if (view.name === 'user') {
     return (
       <UserCenter
@@ -175,6 +192,7 @@ export function App() {
       onReplay={(id) => navigate({ name: 'replay', id })}
       onAdmin={() => navigate({ name: 'admin' })}
       onUser={() => navigate({ name: 'user' })}
+      onGame={(id) => navigate({ name: 'game', id })}
       onLogout={() => {
         // 先让服务端把令牌作废（token_version +1），再清本地；
         // 失败也没关系——本地已经清掉了，服务端那份留到过期也进不来这个设备

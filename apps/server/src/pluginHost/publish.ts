@@ -19,6 +19,8 @@ const manifestSchema = z
     modes: z.array(z.enum(['realtime', 'turnbased'])).min(1),
     tags: z.array(z.string()).default([]),
     estimatedMinutes: z.number().int().min(1).max(600),
+    description: z.string().trim().min(1).max(160).optional(),
+    intro: z.string().trim().min(1).max(6000).optional(),
     /** 更新公告：玩家第一次进到跑这一版的桌时要读一次 */
     notes: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
   })

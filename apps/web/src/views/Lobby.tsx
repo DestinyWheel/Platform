@@ -21,6 +21,7 @@ export function Lobby({
   onLogout,
   onAdmin,
   onUser,
+  onGame,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
@@ -28,6 +29,7 @@ export function Lobby({
   onLogout: () => void;
   onAdmin: () => void;
   onUser: () => void;
+  onGame: (gameId: string) => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [mine, setMine] = useState<TableSummary[]>([]);
@@ -38,10 +40,6 @@ export function Lobby({
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
   const [boardGame, setBoardGame] = useState('');
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
-  const [withBot, setWithBot] = useState(false);
-  const [untimed, setUntimed] = useState(false);
-  /** 每个游戏开几个座位：默认上限，开局只要够下限就行 */
-  const [seats, setSeats] = useState<Record<string, number>>({});
   const [roomCode, setRoomCode] = useState('');
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -83,37 +81,11 @@ export function Lobby({
   const winRate = (row: PlayerStatsRow): string =>
     row.games === 0 ? '—' : `${Math.round((row.wins / row.games) * 100)}%`;
 
-  const seatCount = (game: GameManifest): number => seats[game.id] ?? game.players.max;
-
-  const createTable = async (game: GameManifest): Promise<void> => {
-    setBusy(`create:${game.id}`);
-    setError(null);
-    try {
-      const { id } = await api.createTable({
-        gameId: game.id,
-        maxPlayers: seatCount(game),
-        ...(withBot || untimed
-          ? {
-              options: {
-                ...(withBot ? { bots: 1 } : {}),
-                ...(untimed ? { untimed: true, turnMs: 0 } : {}),
-              },
-            }
-          : {}),
-      });
-      onOpen(id);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const quickMatch = async (game?: GameManifest): Promise<void> => {
+  const quickMatch = async (): Promise<void> => {
     setBusy('quick');
     setError(null);
     try {
-      const result = await api.quickMatch(game?.id);
+      const result = await api.quickMatch();
       onOpen(result.id);
     } catch (err) {
       setError((err as Error).message);
@@ -222,32 +194,24 @@ export function Lobby({
       ) : null}
 
       <section>
-        <h2>开一局</h2>
-        <label className="bot-toggle">
-          <input
-            type="checkbox"
-            checked={withBot}
-            onChange={(event) => setWithBot(event.target.checked)}
-          />
-          开局缺人时补一个机器人（单人也能玩）
-        </label>
-        <label className="bot-toggle">
-          <input
-            type="checkbox"
-            checked={untimed}
-            onChange={(event) => setUntimed(event.target.checked)}
-          />
-          不限时（不自动换手，只有主动「结束回合」才换人）
-        </label>
+        <h2>游戏</h2>
         <div className="game-grid">
           {games.map((game) => {
             const { min, max } = game.players;
             return (
-              <article key={game.id} className="game-card">
+              <button
+                key={game.id}
+                type="button"
+                className="game-card"
+                onClick={() => onGame(game.id)}
+              >
                 <div className="game-name">{game.name}</div>
                 <div className="muted">
                   {min}–{max} 人 · 约 {game.estimatedMinutes} 分钟
                 </div>
+                {game.description ? (
+                  <p className="game-blurb">{game.description}</p>
+                ) : null}
                 <div className="tags">
                   {game.tags.map((tag) => (
                     <span key={tag} className="tag">
@@ -255,46 +219,8 @@ export function Lobby({
                     </span>
                   ))}
                 </div>
-                {max > min ? (
-                  <label className="seat-picker">
-                    <span>座位</span>
-                    <select
-                      className="ghost"
-                      value={seatCount(game)}
-                      onChange={(event) =>
-                        setSeats((current) => ({
-                          ...current,
-                          [game.id]: Number(event.target.value),
-                        }))
-                      }
-                    >
-                      {Array.from({ length: max - min + 1 }, (_, index) => min + index).map(
-                        (count) => (
-                          <option key={count} value={count}>
-                            {count} 人
-                          </option>
-                        ),
-                      )}
-                    </select>
-                  </label>
-                ) : null}
-                <div className="game-actions">
-                  <button
-                    className="primary"
-                    disabled={busy === `create:${game.id}`}
-                    onClick={() => void createTable(game)}
-                  >
-                    开桌
-                  </button>
-                  <button
-                    className="ghost"
-                    disabled={busy === 'quick'}
-                    onClick={() => void quickMatch(game)}
-                  >
-                    随便进一桌
-                  </button>
-                </div>
-              </article>
+                <span className="game-more">查看详情 →</span>
+              </button>
             );
           })}
           {games.length === 0 ? <div className="muted">还没有注册任何游戏</div> : null}
