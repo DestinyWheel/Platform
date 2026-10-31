@@ -212,3 +212,44 @@ test('令牌：过期的验证不过', () => {
     .digest('base64url');
   assert.equal(verifyToken(`${header}.${body}.${sig}`), null);
 });
+
+/* --------------------------- 前端令牌同步 --------------------------- */
+
+test('前端：保存会话后请求立刻带上 Authorization（不等 React 副作用）', async () => {
+  // 回归测试。曾经令牌只在 App 的 useEffect 里设置，而 React 的子组件副作用先于父组件，
+  // 登录后 Lobby 的挂载请求会先一步发出去、没带令牌，被 401 踢回登录页。
+  const memory = new Map<string, string>();
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  globals.localStorage = {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, value: string) => void memory.set(key, value),
+    removeItem: (key: string) => void memory.delete(key),
+  };
+
+  const seen: Record<string, string>[] = [];
+  globals.fetch = async (_url: string, init: { headers?: Record<string, string> } = {}) => {
+    seen.push(init.headers ?? {});
+    return { ok: true, status: 200, text: async () => JSON.stringify({ tables: [] }) };
+  };
+
+  const { saveSession, setAuthToken, api } = await import('../apps/web/src/api.ts');
+  const last = () => seen[seen.length - 1] ?? {};
+  try {
+    saveSession({ token: 'tok-abc', user: { id: 'u1' } as never });
+    await api.myTables();
+    assert.equal(last().authorization, 'Bearer tok-abc');
+
+    saveSession(null);
+    await api.myTables();
+    assert.equal(last().authorization, undefined);
+
+    setAuthToken('tok-xyz');
+    await api.myTables();
+    assert.equal(last().authorization, 'Bearer tok-xyz');
+  } finally {
+    setAuthToken(null);
+    delete globals.localStorage;
+    delete globals.fetch;
+  }
+});

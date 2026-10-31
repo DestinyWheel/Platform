@@ -19,13 +19,7 @@ export interface Session {
   user: AuthUser;
 }
 
-let authToken: string | null = null;
-
-export function setAuthToken(token: string | null): void {
-  authToken = token;
-}
-
-export function loadSession(): Session | null {
+function readSession(): Session | null {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     return raw ? (JSON.parse(raw) as Session) : null;
@@ -34,7 +28,29 @@ export function loadSession(): Session | null {
   }
 }
 
+/**
+ * 当前令牌。
+ *
+ * 这里踩过一个坑：令牌原本只在 App 的 useEffect 里设置，而 React 的副作用是
+ * **子组件先跑、父组件后跑**。于是登录成功的同一次渲染里，Lobby 的挂载请求
+ * （/tables/mine、/stats/me）比"设置令牌"那步先发出去，还没带 Authorization，
+ * 服务端回 401，前端按"登录已过期"处理，人就被踢回登录页了。
+ *
+ * 所以令牌改成跟着会话走：模块加载时从 localStorage 读一次（刷新页面直接可用），
+ * saveSession() 里同步更新（登录后立刻可用）。setAuthToken 留着给显式场景用。
+ */
+let authToken: string | null = readSession()?.token ?? null;
+
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+}
+
+export function loadSession(): Session | null {
+  return readSession();
+}
+
 export function saveSession(session: Session | null): void {
+  authToken = session?.token ?? null;
   if (session) localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   else localStorage.removeItem(SESSION_KEY);
 }
