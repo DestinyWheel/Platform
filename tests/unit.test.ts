@@ -22,6 +22,7 @@ import { signToken, verifyToken } from '../apps/server/src/auth.ts';
 import { INVITE_CODE_LENGTH, ROOM_CODE_LENGTH, randomCode } from '../apps/server/src/codes.ts';
 import { hashState } from '../apps/server/src/hash.ts';
 import dice from '../games/dice/src/server.ts';
+import mandala from '../games/mandala/src/server.ts';
 
 const SETUP = {
   players: ['p1', 'p2'],
@@ -262,3 +263,48 @@ test('邀请码/房间码：长度对、字符集不含看错的 0 O 1 I L', () 
     assert.match(randomCode(ROOM_CODE_LENGTH), /^[A-HJ-NP-Z2-9]{6}$/);
   }
 });
+
+/* ------------------------------ 曼荼罗规则 ------------------------------ */
+
+test('曼荼罗：打高山也要避开两个原野里已有的颜色', () => {
+  // 曾经把这条规则写进介绍时写成了"任何颜色都能进高山"——代码一直是对的，
+  // 但那条错误描述说明这个点值得钉死：高山的合法性取决于两个原野。
+  const probe = (fields: Record<number, number>[], card: number) => {
+    const created = createInitialState(mandala, {
+      players: ['p1', 'p2'],
+      options: {},
+      seed: 7,
+      now: 1_700_000_000_000,
+    } as never) as { state: Record<string, unknown> };
+    const state = created.state as {
+      players: string[];
+      hands: Record<string, number[]>;
+      turn: number;
+      mandalas: unknown[];
+    };
+    const me = state.players[0]!;
+    state.hands[me] = [1, 2];
+    state.turn = 0;
+    state.mandalas[0] = { fields: [fields[0] ?? {}, fields[1] ?? {}], mountain: {} };
+
+    return mandala.actions.playMountain!.validate!(
+      state as never,
+      { type: 'playMountain', payload: { card, mandala: 0 } } as never,
+      { playerId: me } as never,
+    );
+  };
+
+  assert.deepEqual(probe([{}, {}], 0), { ok: true }, '两个原野都空时，颜色可以进高山');
+  assert.deepEqual(
+    probe([{ 1: 1 }, {}], 0),
+    { ok: false, reason: 'color.conflict' },
+    '自己的原野已经有这个颜色，就不能再打高山',
+  );
+  assert.deepEqual(
+    probe([{}, { 1: 1 }], 0),
+    { ok: false, reason: 'color.conflict' },
+    '对方原野有这个颜色，同样不能打高山',
+  );
+  assert.deepEqual(probe([{ 1: 1 }, {}], 1), { ok: true }, '换成别的颜色照样能打');
+});
+
