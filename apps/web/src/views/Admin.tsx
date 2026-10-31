@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdminOverview, AdminPluginVersion, AdminUserRow } from '@platform/sdk';
 import { ApiError, api, type Session } from '../api';
+import { copyText } from '../clipboard';
 
 type Tab = 'overview' | 'plugins' | 'users';
 
@@ -186,7 +187,7 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
 
   const copySecret = (): void => {
     if (!secret) return;
-    void navigator.clipboard?.writeText(secret.password).catch(() => undefined);
+    void copyText(secret.password);
   };
 
   const tableCount = (status: string): number => overview?.tables[status] ?? 0;

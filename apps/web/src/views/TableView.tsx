@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Session } from '../api';
+import { copyText } from '../clipboard';
 import { GameSurface } from '../host/GameSurface';
 import { useGameClient } from '../host/useGameClient';
 import { renderLog } from '../log';
@@ -159,12 +160,11 @@ export function TableView({
     const target = snapshot?.code
       ? `${location.origin}${location.pathname}#/join/${snapshot.code}`
       : `${location.origin}${location.pathname}#/table/${tableId}`;
-    try {
-      await navigator.clipboard.writeText(target);
+    if (await copyText(target)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setActionError(target);
+    } else {
+      setActionError(`复制失败，手动复制这个地址：${target}`);
     }
   };
 

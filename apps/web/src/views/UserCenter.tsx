@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, type Session } from '../api';
+import { copyText, selectText } from '../clipboard';
 import { formatTime } from '../format';
 import { ChangePassword } from './ChangePassword';
 
@@ -29,6 +30,7 @@ export function UserCenter({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  const codeRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,13 +66,15 @@ export function UserCenter({
 
   const copy = async (): Promise<void> => {
     if (!invite?.code) return;
-    try {
-      await navigator.clipboard.writeText(invite.code);
+    setError(null);
+    if (await copyText(invite.code)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setError('复制失败，手动选中那串字符吧');
+      return;
     }
+    // 浏览器彻底不让写剪贴板时的兜底：把码选中，按 Ctrl+C 就行
+    selectText(codeRef.current);
+    setError('浏览器不让网页自动复制，码已经帮你选中了，按 Ctrl+C 就能复制');
   };
 
   return (
@@ -104,7 +108,9 @@ export function UserCenter({
         {invite?.code ? (
           <>
             <div className="invite-card">
-              <code className="invite-code">{invite.code}</code>
+              <code className="invite-code" ref={codeRef} title="点一下全选">
+                {invite.code}
+              </code>
               <button className="ghost" onClick={() => void copy()}>
                 {copied ? '已复制' : '复制'}
               </button>
