@@ -47,7 +47,11 @@ playing   ──触发结算──▶ settling ──高山空──▶ playing�
 | 曼荼罗 | 完整 | 完整 | 完整 |
 | 牌堆 | 剩余张数 | 剩余张数 | 剩余张数 |
 
-自己的沙杯一直可见：牌是自己一张张放进去的，看得见才好算分。对手的沙杯只给张数，对局结束后对所有人翻开。冒烟里断言了「观战者的 view 里既没有 `you` 也没有 `opponent`」。
+自己的沙杯一直可见。规则书原文：
+
+> You may look at the cards in your hand and Cup at any time but keep them hidden from your opponent.
+
+所以沙杯只是**对对手**盖着：对手只给张数，对局结束后对所有人翻开。冒烟里断言了「观战者的 view 里既没有 `you` 也没有 `opponent`」。
 
 ## 顺带扩展了插件契约
 
