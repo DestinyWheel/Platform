@@ -440,7 +440,7 @@ function cupHtml(player: PlayerInfo, title: string): string {
       .sort((a, b) => a[0] - b[0])
       .map(
         ([color, count]) =>
-          `<span class="md-cupchip" style="--c:${colorOf(color)}"><i></i>${count}</span>`,
+          `<span class="md-cupchip" style="--c:${colorOf(color)}" title="${COLOR_NAME[color] ?? ''} ×${count}"><i></i>${count}</span>`,
       )
       .join('');
     return `<div class="md-cup">${title}沙杯 <b>${player.cup.length}</b> ${chips}</div>`;

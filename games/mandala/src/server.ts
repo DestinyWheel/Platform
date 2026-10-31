@@ -703,7 +703,9 @@ function mandalaView(state: MandalaState, viewer: PlayerId | 'spectator'): Publi
     handCount: state.hands[playerId]?.length ?? 0,
     cupCount: state.cups[playerId]?.length ?? 0,
     river: state.rivers[playerId] ?? [],
-    cup: revealed ? (state.cups[playerId] ?? []) : null,
+    // 沙杯盖着：对手只看到张数；自己看得到每张的颜色（牌是自己一张张放进去的）。
+    // 观战者谁都不给，对局结束后对所有人翻开。
+    cup: revealed || playerId === me ? (state.cups[playerId] ?? []) : null,
   });
 
   return {

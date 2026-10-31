@@ -535,6 +535,10 @@ assert.equal(openedData.you.hand.length, 6, '起始手牌应为 6 张');
 assert.equal(openedData.opponent?.hand, undefined, '不应看到对手手牌内容');
 assert.equal(openedData.opponent.handCount, 6, '只应看到对手手牌张数');
 assert.equal(openedData.you.cupCount, 2, '起始沙杯 2 张');
+assert.ok(Array.isArray(openedData.you.cup), '自己的沙杯应该看得到具体颜色');
+assert.equal(openedData.you.cup.length, 2, '自己沙杯的张数要和 cupCount 对上');
+assert.equal(openedData.opponent.cup, null, '对手的沙杯只能看到张数');
+assert.equal(openedData.opponent.cupCount, 2, '对手沙杯张数还是可见的');
 assert.equal(openedData.mandalas.length, 2);
 const mountainCards = Object.values(openedData.mandalas[0].mountain ?? {}).reduce(
   (sum, count) => sum + count,
