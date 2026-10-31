@@ -214,6 +214,48 @@ const bob = await registerUser(api1, '鲍勃', PASSWORD.bob);
 assert.equal(alice.user.isAdmin, true, '第一个注册的人应该是管理员');
 assert.equal(bob.user.isAdmin, false, '第二个人不是管理员');
 
+/* ---------------------------- 个人邀请码 ---------------------------- */
+
+const invitePattern = /^[A-HJ-NP-Z2-9]{8}$/;
+
+const aliceInvite = await api1('/me/invite', { token: alice.token });
+assert.match(aliceInvite.code ?? '', invitePattern, '注册时应自动生成 8 位邀请码');
+assert.equal(aliceInvite.invited.length, 0, '刚注册时还没邀请过人');
+
+// 这个功能上线前注册的老账号：邀请码是空的，可以补生成一次
+await db1.execute('UPDATE users SET invite_code = NULL, invite_code_at = NULL WHERE id = $1', [
+  bob.user.id,
+]);
+const bobBefore = await api1('/me/invite', { token: bob.token });
+assert.equal(bobBefore.code, null, '老账号初始没有邀请码');
+
+const bobGenerated = await api1('/me/invite', { token: bob.token, method: 'POST' });
+assert.match(bobGenerated.code, invitePattern, '生成出来的邀请码格式应该对');
+await expectFailure(
+  api1('/me/invite', { token: bob.token, method: 'POST' }),
+  409,
+  'invite_exists',
+  '邀请码只能生成一次',
+);
+
+// 不填邀请码照样能注册；填了就得是真的，并且要记下邀请人
+const dave = await registerUser(api1, '戴夫', 'dave-smoke-2024', { code: aliceInvite.code.toLowerCase() });
+assert.equal(dave.user.isAdmin, false, '用邀请码注册的人不是管理员');
+const aliceAfter = await api1('/me/invite', { token: alice.token });
+assert.ok(
+  aliceAfter.invited.some((person) => person.name === '戴夫'),
+  '爱丽丝的邀请列表里应该有戴夫',
+);
+await expectFailure(
+  registerUser(api1, '查码人', 'nobody-smoke-2024', { code: 'ZZZZZZZZ' }),
+  403,
+  'bad_code',
+  '邀请码不存在',
+);
+const openUser = await registerUser(api1, '自来的', 'walkin-smoke-2024');
+assert.equal(openUser.user.isAdmin, false, '不填邀请码也能注册');
+console.log('✓ 邀请码：注册自动生成、老账号可补生成一次、填了记账、不填也能注册');
+
 const games1 = await api1('/games');
 assert.ok(games1.games.length >= 2, `应自动发布多个游戏，实际 ${games1.games.length}`);
 const diceInitial = games1.games.find((game) => game.id === 'dice');

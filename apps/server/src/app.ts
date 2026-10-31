@@ -98,9 +98,10 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(1, '请输入新密码').max(200),
 });
 
-/** 邀请码：设了 REGISTER_CODE 就变成"凭码注册"，不设就是开放注册 */
-const REGISTER_CODE = process.env.REGISTER_CODE?.trim() || null;
-
+/**
+ * 邀请码是社交机制，不是门禁：注册可以直接注册，填了码就记下"谁邀请的"。
+ * （早期版本用 REGISTER_CODE 环境变量做准入，现在改成每个成员的个人邀请码了。）
+ */
 const createTableSchema = z.object({
   gameId: z.string().min(1),
   maxPlayers: z.number().int().optional(),
@@ -332,9 +333,8 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     user: publicUser(user),
   });
 
-  /** 登录页要知道"要不要填邀请码"，这一步必须在未登录时就能问 */
+  /** 登录页要知道"能不能自助认领密码"，这一步必须在未登录时就能问 */
   app.get('/api/auth/config', async () => ({
-    registration: REGISTER_CODE ? 'code' : 'open',
     /** 老账号可以自助认领密码；管理员补完密码后可以设 AUTH_ALLOW_CLAIM=0 关掉 */
     allowClaim: process.env.AUTH_ALLOW_CLAIM !== '0',
   }));
@@ -343,20 +343,28 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     checkLimit(limits.login.take(request.ip));
     const input = registerSchema.parse(request.body);
 
-    if (REGISTER_CODE && input.code !== REGISTER_CODE) {
-      throw new AuthError('bad_code', '邀请码不对', 403);
-    }
     if (input.confirm !== undefined && input.confirm !== input.password) {
       throw new AuthError('password_mismatch', '两次输入的密码不一样', 400);
     }
     const problem = checkPasswordInput(input.password, input.name);
     if (problem) throw new AuthError('weak_password', problem, 400);
 
+    // 邀请码选填。填了就必须是真的——否则打错一个字也照样注册成功，
+    // 但邀请人也记不上，双方都不知道出了什么问题。
+    const code = (input.code ?? '').trim().toUpperCase();
+    const inviter = code ? await store.findUserByInviteCode(code) : undefined;
+    if (code && !inviter) {
+      throw new AuthError('bad_code', '邀请码不对，检查一下有没有抄错', 403);
+    }
+
     const hash = await hashPassword(input.password);
-    const user = await store.createUser(input.name, hash);
+    const user = await store.createUser(input.name, hash, inviter?.id ?? null);
     if (!user) throw new AuthError('name_taken', '这个昵称已经被占用了', 409);
 
-    request.log.info({ userId: user.id, name: user.name, isAdmin: user.isAdmin }, '注册');
+    request.log.info(
+      { userId: user.id, name: user.name, isAdmin: user.isAdmin, invitedBy: inviter?.name ?? null },
+      '注册',
+    );
     metrics.inc('auth.registered');
     return issue(user, input.remember ?? false);
   });
@@ -450,6 +458,35 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   app.get('/api/me', async (request) => {
     const user = await requireUser(request);
     return { user: publicUser(user) };
+  });
+
+  /* --------------------------- 个人邀请码 --------------------------- */
+
+  /** 用户中心：我的邀请码 + 我拉进来的人 */
+  app.get('/api/me/invite', async (request) => {
+    const user = await requireUser(request);
+    return {
+      code: user.inviteCode,
+      createdAt: user.inviteCodeAt,
+      invited: await store.listInvited(user.id),
+    };
+  });
+
+  /**
+   * 生成我的邀请码。只能生成一次 —— 已经有了就 409，
+   * 不覆盖（码已经发出去给别人了，换掉会把那个人的来源断掉）。
+   */
+  app.post('/api/me/invite', async (request) => {
+    const user = await requireUser(request);
+    if (user.inviteCode) {
+      throw new AuthError('invite_exists', '邀请码已经生成过了，不能改', 409);
+    }
+    const updated = await store.setInviteCode(user.id);
+    if (!updated?.inviteCode) {
+      throw new AuthError('invite_exists', '邀请码已经生成过了，不能改', 409);
+    }
+    request.log.info({ userId: user.id }, '生成邀请码');
+    return { code: updated.inviteCode };
   });
 
   /** 版本公告已读：一个人对（游戏, 版本）只会读一次 */

@@ -111,11 +111,19 @@ async function sendBinary<T>(path: string, body: ArrayBuffer): Promise<T> {
 }
 
 export const api = {
-  authConfig: () =>
-    request<{ registration: 'open' | 'code'; allowClaim: boolean }>('/auth/config'),
-
   /** 刷新当前用户（权限可能被管理员改过，本地存的可能过期了） */
   me: () => request<{ user: AuthUser }>('/me'),
+
+  /** 用户中心：我的邀请码 + 我拉进来的人（code=null 表示还没生成） */
+  myInvite: () =>
+    request<{
+      code: string | null;
+      createdAt: number | null;
+      invited: { id: string; name: string; createdAt: number }[];
+    }>('/me/invite'),
+
+  /** 生成我的邀请码，只能生成一次；已经有了服务端回 409 */
+  generateInvite: () => request<{ code: string }>('/me/invite', { method: 'POST' }),
 
   register: (input: { name: string; password: string; confirm: string; code?: string; remember?: boolean }) =>
     request<{ token: string; user: AuthUser }>('/auth/register', {

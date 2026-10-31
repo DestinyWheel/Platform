@@ -19,6 +19,7 @@ import {
 import { computeDeltas, expectedScore, kFactor } from '../apps/server/src/elo.ts';
 import { checkPasswordInput, hashPassword, verifyPassword } from '../apps/server/src/password.ts';
 import { signToken, verifyToken } from '../apps/server/src/auth.ts';
+import { INVITE_CODE_LENGTH, ROOM_CODE_LENGTH, randomCode } from '../apps/server/src/codes.ts';
 import { hashState } from '../apps/server/src/hash.ts';
 import dice from '../games/dice/src/server.ts';
 
@@ -214,7 +215,6 @@ test('令牌：过期的验证不过', () => {
 });
 
 /* --------------------------- 前端令牌同步 --------------------------- */
-
 test('前端：保存会话后请求立刻带上 Authorization（不等 React 副作用）', async () => {
   // 回归测试。曾经令牌只在 App 的 useEffect 里设置，而 React 的子组件副作用先于父组件，
   // 登录后 Lobby 的挂载请求会先一步发出去、没带令牌，被 401 踢回登录页。
@@ -251,5 +251,14 @@ test('前端：保存会话后请求立刻带上 Authorization（不等 React �
     setAuthToken(null);
     delete globals.localStorage;
     delete globals.fetch;
+  }
+});
+
+/* ------------------------------ 短码 ------------------------------ */
+
+test('邀请码/房间码：长度对、字符集不含看错的 0 O 1 I L', () => {
+  for (let index = 0; index < 200; index += 1) {
+    assert.match(randomCode(INVITE_CODE_LENGTH), /^[A-HJ-NP-Z2-9]{8}$/);
+    assert.match(randomCode(ROOM_CODE_LENGTH), /^[A-HJ-NP-Z2-9]{6}$/);
   }
 });

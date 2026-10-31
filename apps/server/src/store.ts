@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { BaseState, ChatMessage, GameManifest, LogEntry, TableStatus } from '@platform/sdk';
+import { INVITE_CODE_LENGTH, randomCode } from './codes.js';
 import type { Db } from './db/types.js';
 
 export interface UserRecord {
@@ -13,6 +14,11 @@ export interface UserRecord {
   /** 令牌版本；和 JWT 里的 ver 对不上就说明这次会话已被作废 */
   tokenVersion: number;
   lastLoginAt: number | null;
+  /** 个人邀请码：注册时自动生成；老账号是 null，可以在用户中心生成一次 */
+  inviteCode: string | null;
+  inviteCodeAt: number | null;
+  /** 用谁的邀请码注册的 */
+  invitedBy: string | null;
 }
 
 /** 只在登录校验时用；命名上带 secret，避免被顺手塞进接口返回值 */
@@ -85,9 +91,22 @@ export interface Store {
   findUserName(name: string): Promise<UserRecord | undefined>;
   findUserWithSecret(name: string): Promise<UserWithSecret | undefined>;
   /** 重名返回 null（靠 name 的唯一索引兜底，不靠"先查再插"） */
-  createUser(name: string, passwordHash: string | null): Promise<UserRecord | null>;
+  createUser(
+    name: string,
+    passwordHash: string | null,
+    invitedBy?: string | null,
+  ): Promise<UserRecord | null>;
   getUser(id: string): Promise<UserRecord | undefined>;
   countUsers(): Promise<number>;
+  /** 按邀请码找人；注册时用它确认"这个码是谁的" */
+  findUserByInviteCode(code: string): Promise<UserRecord | undefined>;
+  /**
+   * 生成个人邀请码，**只能生成一次**：
+   * 已经有了就返回 null（调用方转成 409），不会覆盖。
+   */
+  setInviteCode(id: string): Promise<UserRecord | null>;
+  /** 我用邀请码拉进来的人（新的在前） */
+  listInvited(userId: string, limit?: number): Promise<{ id: string; name: string; createdAt: number }[]>;
   /** 设密码（注册后补设 / 认领 / 管理员重置）并作废所有旧令牌，返回新的 token_version */
   setPassword(id: string, passwordHash: string): Promise<number>;
   /** 退出登录：作废所有旧令牌 */
@@ -263,7 +282,8 @@ function toRecord(row: TableRow): TableRecord {
 }
 
 /** 常规查询列；密码哈希**不在**这里，只有 findUserWithSecret 才显式取 */
-const USER_COLUMNS = 'id, name, created_at, is_admin, token_version, last_login_at, password_set_at';
+const USER_COLUMNS =
+  'id, name, created_at, is_admin, token_version, last_login_at, password_set_at, invite_code, invite_code_at, invited_by';
 
 interface UserRow {
   id: string;
@@ -274,6 +294,9 @@ interface UserRow {
   token_version: number;
   last_login_at: number | null;
   password_set_at: number | null;
+  invite_code: string | null;
+  invite_code_at: number | null;
+  invited_by: string | null;
 }
 
 function toUser(row: UserRow): UserRecord {
@@ -285,6 +308,9 @@ function toUser(row: UserRow): UserRecord {
     hasPassword: row.password_set_at !== null,
     tokenVersion: Number(row.token_version ?? 0),
     lastLoginAt: row.last_login_at === null ? null : Number(row.last_login_at),
+    inviteCode: row.invite_code ?? null,
+    inviteCodeAt: row.invite_code_at === null ? null : Number(row.invite_code_at),
+    invitedBy: row.invited_by ?? null,
   };
 }
 
@@ -306,18 +332,46 @@ export class PgStore implements Store {
     return row ? { ...toUser(row), passwordHash: row.password_hash ?? null } : undefined;
   }
 
-  async createUser(name: string, passwordHash: string | null): Promise<UserRecord | null> {
+  async createUser(
+    name: string,
+    passwordHash: string | null,
+    invitedBy: string | null = null,
+  ): Promise<UserRecord | null> {
     // 第一个注册的人自动成为管理员。is_admin 在 SQL 里算，省掉"先 count 再插"的竞态
     const now = Date.now();
-    const rows = await this.db.query<{ id: string }>(
-      `INSERT INTO users (id, name, created_at, is_admin, password_hash, password_set_at, last_login_at)
-       VALUES ($1, $2, $3, NOT EXISTS (SELECT 1 FROM users), $4, $5, $6)
-       ON CONFLICT (name) DO NOTHING
-       RETURNING id`,
-      [randomUUID(), name, now, passwordHash, passwordHash ? now : null, now],
-    );
-    if (rows.length === 0) return null;
-    return (await this.getUser(rows[0]!.id)) ?? null;
+
+    // 邀请码在注册时就生成好（"只能生成一次"对普通用户来说就是这一次）。
+    // 8 位 31 进制，撞车概率可以忽略，但撞了要换一个再来——不能把注册搞失败。
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        const rows = await this.db.query<{ id: string }>(
+          `INSERT INTO users
+             (id, name, created_at, is_admin, password_hash, password_set_at, last_login_at,
+              invite_code, invite_code_at, invited_by)
+           VALUES ($1, $2, $3, NOT EXISTS (SELECT 1 FROM users), $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (name) DO NOTHING
+           RETURNING id`,
+          [
+            randomUUID(),
+            name,
+            now,
+            passwordHash,
+            passwordHash ? now : null,
+            now,
+            randomCode(INVITE_CODE_LENGTH),
+            now,
+            invitedBy,
+          ],
+        );
+        if (rows.length === 0) return null;
+        return (await this.getUser(rows[0]!.id)) ?? null;
+      } catch (error) {
+        // 23505 = 唯一约束冲突。重名已经被 ON CONFLICT 吃掉了，走到这里的只可能是邀请码撞了
+        if ((error as { code?: string }).code === '23505') continue;
+        throw error;
+      }
+    }
+    throw new Error('生成邀请码失败，请重试');
   }
 
   async getUser(id: string): Promise<UserRecord | undefined> {
@@ -329,6 +383,54 @@ export class PgStore implements Store {
   async countUsers(): Promise<number> {
     const rows = await this.db.query<{ n: number }>('SELECT count(*)::int AS n FROM users');
     return Number(rows[0]?.n ?? 0);
+  }
+
+  async findUserByInviteCode(code: string): Promise<UserRecord | undefined> {
+    const rows = await this.db.query<UserRow>(
+      `SELECT ${USER_COLUMNS} FROM users WHERE invite_code = $1`,
+      [code],
+    );
+    const row = rows[0];
+    return row ? toUser(row) : undefined;
+  }
+
+  /**
+   * 生成一次个人邀请码。
+   *
+   * 「只能生成一次」不是靠"先查再写"，而是靠 UPDATE 的 WHERE invite_code IS NULL：
+   * 两个请求同时点，也只会有一个真的写进去，另一个拿到 0 行返回 null。
+   */
+  async setInviteCode(id: string): Promise<UserRecord | null> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const code = randomCode(INVITE_CODE_LENGTH);
+      if (await this.findUserByInviteCode(code)) continue;
+
+      try {
+        const rows = await this.db.query<{ id: string }>(
+          `UPDATE users SET invite_code = $2, invite_code_at = $3
+             WHERE id = $1 AND invite_code IS NULL
+           RETURNING id`,
+          [id, code, Date.now()],
+        );
+        if (rows.length === 0) return null;
+        return (await this.getUser(id)) ?? null;
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') continue;
+        throw error;
+      }
+    }
+    throw new Error('生成邀请码失败，请重试');
+  }
+
+  async listInvited(
+    userId: string,
+    limit = 100,
+  ): Promise<{ id: string; name: string; createdAt: number }[]> {
+    const rows = await this.db.query<{ id: string; name: string; created_at: number }>(
+      'SELECT id, name, created_at FROM users WHERE invited_by = $1 ORDER BY created_at DESC LIMIT $2',
+      [userId, limit],
+    );
+    return rows.map((row) => ({ id: row.id, name: row.name, createdAt: Number(row.created_at) }));
   }
 
   async setPassword(id: string, passwordHash: string): Promise<number> {

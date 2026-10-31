@@ -982,15 +982,59 @@ select.ghost {
   vertical-align: middle;
 }
 
+/* ---------------- 个人中心 ---------------- */
+
+.user-center > section {
+  margin-bottom: 28px;
+}
+
+.user-center > section:last-of-type {
+  margin-bottom: 0;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 0 0 14px;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 14px;
+}
+
+.invite-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(88, 140, 220, 0.16), rgba(88, 140, 220, 0.03));
+}
+
+.invite-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--text);
+}
+
 .seat-picker {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
   color: var(--muted);
-}
-
-.seat-picker select {
+}.seat-picker select {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text);

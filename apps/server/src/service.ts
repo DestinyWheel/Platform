@@ -15,6 +15,7 @@ import {
   RuleError,
 } from '@platform/engine';
 import type { EventBus } from './bus.js';
+import { ROOM_CODE_LENGTH, randomCode } from './codes.js';
 import type { PluginHost } from './pluginHost/host.js';
 import type { PluginRuntime } from './pluginHost/runtime.js';
 import { hashState } from './hash.js';
@@ -28,17 +29,6 @@ const MAX_CAS_ATTEMPTS = 5;
 const MAX_REPLAY_STEPS = 400;
 /** 每多少步存一份回放快照 */
 const SNAPSHOT_EVERY = 50;
-
-/** 房间码字母表：去掉 0/O/1/I/L，念出来不会听错 */
-const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
-function randomCode(length = 6): string {
-  let code = '';
-  for (let index = 0; index < length; index += 1) {
-    code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
-  }
-  return code;
-}
 
 export class ServiceError extends Error {
   constructor(
@@ -171,7 +161,7 @@ export class TableService {
   /** 房间码撞了就换一个；6 位 31 进制，撞车概率低到可以忽略，但还是认真重试 */
   private async allocateCode(): Promise<string> {
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const code = randomCode();
+      const code = randomCode(ROOM_CODE_LENGTH);
       if (!(await this.store.findTableByCode(code))) return code;
     }
     throw new ServiceError('code_exhausted', '生成房间号失败，稍后再试');

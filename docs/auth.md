@@ -75,13 +75,15 @@ JWT 是无状态的，签出去就收不回来。但只要在库里放一个版�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/api/auth/config` | 是否需要邀请码、认领通道是否开着（登录页要提前知道） |
-| `POST` | `/api/auth/register` | `{name, password, confirm?, code?}` → `{token, user}` |
+| `GET` | `/api/auth/config` | 认领通道是否开着（运维/工具用的能力探测） |
+| `POST` | `/api/auth/register` | `{name, password, confirm?, code?}` → `{token, user}`；`code` 选填 |
 | `POST` | `/api/auth/login` | `{name, password, remember?}` → `{token, user}` |
 | `POST` | `/api/auth/claim` | 给旧账号补密码，见 §6 |
 | `POST` | `/api/auth/password` | 改密码 `{oldPassword, newPassword}` → 新令牌 |
 | `POST` | `/api/auth/logout` | 作废令牌 |
 | `GET` | `/api/me` | 当前用户 |
+| `GET` | `/api/me/invite` | `{code, createdAt, invited[]}`：我的邀请码和我拉来的人 |
+| `POST` | `/api/me/invite` | 生成我的邀请码；**只能生成一次**，已有则 409 |
 
 错误码（前端靠它决定走哪个流程，不靠文案）：
 
@@ -92,7 +94,21 @@ JWT 是无状态的，签出去就收不回来。但只要在库里放一个版�
 | `name_taken` | 409 | 注册时昵称被占 |
 | `weak_password` | 400 | 密码不合规 |
 | `claim_unavailable` | 409 | 这个昵称没有可认领的账号 |
-| `bad_code` | 403 | 邀请码不对 |
+| `bad_code` | 403 | 邀请码填了但对不上任何人 |
+| `invite_exists` | 409 | 邀请码已经生成过，不能改 |
+
+## 5.1 邀请码
+
+**邀请码是社交机制，不是门禁。** 注册不填码照样能注册；填了就把「谁邀请的」记下来，用户在个人中心能看到自己邀请的人。
+
+```
+注册   → 系统自动生成一个 8 位个人邀请码（31 进制，去掉 0/O/1/I/L）
+老账号 → 上线前注册的人 invite_code 为 NULL，可在个人中心生成一次
+约束   → 只能生成一次：UPDATE ... WHERE invite_code IS NULL，并发点两次也只写一次
+注册时 → 填了码就校验，对不上报 bad_code；对上了把 invited_by 记成邀请人的 user id
+```
+
+为什么不用"邀请码 = 准入"：那样第一个用户永远进不来（没人发码给他），要么留后门、要么手工插库。现在开放注册 + 记录来源，两个问题都没有了。
 
 ## 6. 老账号怎么办
 
@@ -119,8 +135,9 @@ JWT 是无状态的，签出去就收不回来。但只要在库里放一个版�
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `JWT_SECRET` | `dev-secret-change-me` | **上线必须改**。改了等于所有旧令牌失效 |
-| `REGISTER_CODE` | 空 = 开放注册 | 设了就变成"凭邀请码注册" |
 | `AUTH_ALLOW_CLAIM` | 开 | `0` 关闭旧账号自助认领 |
+
+> `REGISTER_CODE` 已经废弃：邀请码改成每人一个、且注册不再需要它。留着这个变量不会有任何效果。
 
 ## 9. 已知取舍
 

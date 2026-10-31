@@ -7,7 +7,6 @@ import type {
   TableSummary,
 } from '@platform/sdk';
 import { api, type Session } from '../api';
-import { ChangePassword } from './ChangePassword';
 
 const STATUS_LABEL: Record<string, string> = {
   lobby: '等待中',
@@ -20,21 +19,20 @@ export function Lobby({
   onOpen,
   onReplay,
   onLogout,
-  onSession,
   onAdmin,
+  onUser,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
   onReplay: (tableId: string) => void;
   onLogout: () => void;
-  onSession: (session: Session) => void;
   onAdmin: () => void;
+  onUser: () => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [mine, setMine] = useState<TableSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [changingPassword, setChangingPassword] = useState(false);
 
   const [perGame, setPerGame] = useState<PlayerStatsRow[]>([]);
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
@@ -149,28 +147,18 @@ export function Lobby({
           {session.user.name}
           {session.user.isAdmin ? ' · 管理员' : ''}
         </span>
+        <button className="ghost" onClick={onUser}>
+          个人中心
+        </button>
         {session.user.isAdmin ? (
           <button className="ghost" onClick={onAdmin}>
             管理
           </button>
         ) : null}
-        <button className="ghost" onClick={() => setChangingPassword(true)}>
-          改密码
-        </button>
         <button className="ghost" onClick={onLogout}>
           退出
         </button>
       </header>
-
-      {changingPassword ? (
-        <ChangePassword
-          onClose={() => setChangingPassword(false)}
-          onChanged={(next) => {
-            onSession(next);
-            setChangingPassword(false);
-          }}
-        />
-      ) : null}
 
       {error ? <div className="error">{error}</div> : null}
 

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { ApiError, api, type Session } from '../api';
 import { PasswordField } from '../PasswordField';
 
@@ -6,7 +6,8 @@ type Mode = 'login' | 'register' | 'claim';
 
 const HINT: Record<Mode, string> = {
   login: '用昵称和密码登录。',
-  register: '第一次来就注册一个。密码至少 8 位，平台不发邮件，忘了只能找管理员重置。',
+  register:
+    '第一次来就注册一个。密码至少 8 位，平台不发邮件，忘了只能找管理员重置。有邀请码就填上，没有也能注册。',
   claim: '这个账号是旧版「输昵称就能进」时期创建的，还没有密码。现在设一个，原来的战绩和评分都还在。',
 };
 
@@ -31,17 +32,6 @@ export function Login({
   const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [config, setConfig] = useState<{ registration: 'open' | 'code'; allowClaim: boolean }>({
-    registration: 'open',
-    allowClaim: true,
-  });
-
-  useEffect(() => {
-    api
-      .authConfig()
-      .then(setConfig)
-      .catch(() => undefined);
-  }, []);
 
   const trimmed = name.trim();
   const needPassword = mode === 'login' ? 1 : 8;
@@ -49,8 +39,7 @@ export function Login({
     !busy &&
     trimmed.length >= 2 &&
     password.length >= needPassword &&
-    (mode !== 'register' || password === confirm) &&
-    (mode !== 'register' || config.registration === 'open' || code.trim().length > 0);
+    (mode !== 'register' || password === confirm);
 
   const switchMode = (next: Mode): void => {
     setMode(next);
@@ -72,7 +61,7 @@ export function Login({
               name: trimmed,
               password,
               confirm,
-              ...(config.registration === 'code' ? { code: code.trim() } : {}),
+              ...(code.trim() ? { code: code.trim().toUpperCase() } : {}),
               remember,
             })
           : mode === 'claim'
@@ -150,10 +139,15 @@ export function Login({
           />
         ) : null}
 
-        {mode === 'register' && config.registration === 'code' ? (
+        {mode === 'register' ? (
           <label className="field">
-            <span>邀请码</span>
-            <input value={code} onChange={(event) => setCode(event.target.value)} placeholder="向管理员要" />
+            <span>邀请码（选填）</span>
+            <input
+              value={code}
+              onChange={(event) => setCode(event.target.value.toUpperCase())}
+              placeholder="朋友给你的 8 位码，没有就留空"
+              maxLength={8}
+            />
           </label>
         ) : null}
 
