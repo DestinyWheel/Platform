@@ -841,7 +841,7 @@ select.ghost {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* 密码框右边的「显示 / 隐藏」 */
+/* 密码框右边的眼睛按钮（显示 / 隐藏） */
 .password-wrap {
   position: relative;
   display: flex;
@@ -849,7 +849,7 @@ select.ghost {
 }
 
 .password-wrap input {
-  padding-right: 62px;
+  padding-right: 42px;
 }
 
 .reveal {
@@ -857,14 +857,22 @@ select.ghost {
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
-  padding: 5px 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: none;
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
+  line-height: 0;
   cursor: pointer;
+}
+
+.reveal svg {
+  pointer-events: none;
 }
 
 .reveal:hover {
