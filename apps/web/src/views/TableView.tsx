@@ -240,7 +240,7 @@ export function TableView({
                   {player.bot ? <span className="tag">🤖</span> : null}
                   {player.id === snapshot.hostId ? <span className="tag">房主</span> : null}
                   {player.forfeited ? <span className="tag">认负</span> : null}
-                  {snapshot.activePlayer === player.id ? <span className="dot" /> : null}
+                  {snapshot.activePlayer === player.id ? <span className="active-dot" /> : null}
                 </div>
               );
             })}

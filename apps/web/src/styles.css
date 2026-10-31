@@ -383,7 +383,14 @@ input:focus {
   font-weight: 600;
 }
 
-.dot {
+/**
+ * 「当前行动玩家」前面的小绿点。
+ *
+ * 特意用了带前缀的名字：插件 UI 和平台共用同一个 document，`.dot` 这种
+ * 单单词类名会连插件一起命中——曼荼罗的长河格子也叫 `.dot`，结果每格
+ * 都被这里的 pulse 动画带着一直闪。
+ */
+.active-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;

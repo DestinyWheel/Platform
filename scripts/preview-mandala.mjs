@@ -72,6 +72,7 @@ function view(mandalas, extra = {}) {
         cup: null,
       },
       settlement: null,
+      scores: null,
       undoCount: 2,
       untimed: false,
       revealed: false,
@@ -91,7 +92,7 @@ const sceneSettle = view(
     { fields: [{ 1: 2, 5: 1 }, { 2: 3 }], mountain: { 3: 1, 4: 2, 6: 1 }, colorCount: 5 },
     { fields: [{ 3: 1 }, { 6: 2 }], mountain: { 2: 1 }, colorCount: 3 },
   ],
-  { settlement: { mandalaIdx: 0, picker: 'p1' } },
+  { settlement: { mandalaIdx: 0, picker: 'p1' }, scores: { p1: 12, p2: 9 } },
 );
 
 const scenes = [

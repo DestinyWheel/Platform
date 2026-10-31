@@ -62,6 +62,8 @@ interface MandalaData {
   you: (PlayerInfo & { hand: number[] }) | null;
   opponent: PlayerInfo | null;
   settlement: { mandalaIdx: number; picker: PlayerId } | null;
+  /** 结算中和结束后才有：双方当前总分 */
+  scores: Record<PlayerId, number> | null;
   /** 本回合内还能撤销几步 */
   undoCount: number;
   /** 不限时房间：不自动换手 */
@@ -203,7 +205,7 @@ const CSS = `
   background:#141a22; font-size:10px; color:#5d6874;
 }
 .md-slot.filled { border-color:#3d4856; background:#1a222c; }
-.md-slot .dot { width:15px; height:15px; border-radius:50%; background:var(--c); box-shadow:0 0 8px color-mix(in srgb, var(--c) 60%, transparent); }
+.md-slot .dot { width:15px; height:15px; border-radius:50%; background:var(--c); box-shadow:0 0 8px color-mix(in srgb, var(--c) 60%, transparent); animation:none; }
 .md-slot .mult { font-size:9px; color:#6b7787; letter-spacing:.02em; }
 
 .md-cup { font-size:12px; color:#8b98a7; display:flex; align-items:center; gap:6px; }
@@ -253,6 +255,12 @@ const CSS = `
   display:flex; flex-direction:column; gap:10px; align-items:center;
 }
 .md-settle h4 { margin:0; font-size:14px; color:#e3b341; }
+.md-scores { display:flex; align-items:center; justify-content:center; gap:14px; }
+.md-score { display:flex; align-items:baseline; gap:6px; color:#8b98a7; }
+.md-score .who { font-size:12px; }
+.md-score b { font-size:20px; color:#e6edf3; font-variant-numeric:tabular-nums; }
+.md-score.lead b { color:#e3b341; }
+.md-score-sep { color:#4a5563; }
 .md-picks { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
 .md-pick {
   width:46px; height:46px; border-radius:50%; border:2px solid rgba(255,255,255,.12); cursor:pointer;
@@ -508,7 +516,7 @@ function render(): void {
 
   const resultHtml =
     view.finished && view.ranking
-      ? `<div class="md-result">🏆 ${view.ranking[0]!.map(nameOf).join('、')} 获胜</div>`
+      ? `<div class="md-result">🏆 ${view.ranking[0]!.map(nameOf).join('、')} 获胜</div>${scoreboard(data)}`
       : '';
 
   const actionsHtml = view.finished
@@ -585,6 +593,20 @@ function render(): void {
   }
 }
 
+/** 结算 / 对局结束时的比分条：名字 + 总分，领先的一方数字是金色 */
+function scoreboard(data: MandalaData): string {
+  if (!data.scores) return '';
+  const scores = data.scores;
+  const valueOf = (id: PlayerId): number => scores[id] ?? 0;
+  const best = Math.max(...data.players.map((player) => valueOf(player.id)));
+
+  const items = data.players.map(
+    (player) =>
+      `<div class="md-score${best > 0 && valueOf(player.id) === best ? ' lead' : ''}"><span class="who">${nameOf(player.id)}</span><b>${valueOf(player.id)}</b></div>`,
+  );
+  return `<div class="md-scores">${items.join('<span class="md-score-sep">:</span>')}</div>`;
+}
+
 function renderSettlement(
   settlement: { mandalaIdx: number; picker: PlayerId },
   data: MandalaData,
@@ -607,6 +629,7 @@ function renderSettlement(
 
   return `<div class="md-settle">
       <h4>曼荼罗 ${settlement.mandalaIdx + 1} 已集齐六色 · ${nameOf(settlement.picker)} 先选</h4>
+      ${scoreboard(data)}
       <div class="md-picks">${picks}</div>
       <div class="md-hint">${myTurn ? '点一种颜色，拿走高山上该颜色的全部牌' : '等待对方选色'}</div>
     </div>`;

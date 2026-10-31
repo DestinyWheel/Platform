@@ -735,6 +735,14 @@ function mandalaView(state: MandalaState, viewer: PlayerId | 'spectator'): Publi
       settlement: state.settlement
         ? { mandalaIdx: state.settlement.mandalaIdx, picker: state.settlement.picker }
         : null,
+      /**
+       * 双方总分。只在结算中和结束后给：对局中给出来，就能靠分数的变化反推
+       * 对手沙杯里是什么颜色（长河是明牌，分数一减就露馅）。
+       */
+      scores:
+        state.settlement !== null || state.finished
+          ? Object.fromEntries(state.players.map((player) => [player, scoreOf(state, player)]))
+          : null,
       /** 本回合内还能撤销几步 */
       undoCount: state.undo.length,
       untimed: state.untimed,
