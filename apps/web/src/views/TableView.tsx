@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, type Session } from '../api';
 import { copyText } from '../clipboard';
-import { GameSurface } from '../host/GameSurface';
+import { GameSurface, GameSidePanel } from '../host/GameSurface';
 import { useGameClient } from '../host/useGameClient';
 import { renderLog } from '../log';
 import { useTableSocket } from '../useTableSocket';
@@ -303,6 +303,19 @@ export function TableView({
         </section>
 
         <aside className="sidebar">
+          <GameSidePanel
+            client={client}
+            snapshot={{
+              status: snapshot.status,
+              view: snapshot.view,
+              legal: snapshot.legal,
+              legalMoves: snapshot.legalMoves,
+              deadlineAt: snapshot.deadlineAt,
+            }}
+            me={session.user.id}
+            players={snapshot.players}
+            onAction={sendAction}
+          />
           {snapshot.ui?.hideLog ? null : (
             <>
               <h3>对局日志</h3>

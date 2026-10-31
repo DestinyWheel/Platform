@@ -39,6 +39,15 @@ export interface GameClient {
   /** 视图被销毁时调用：解绑监听、清定时器 */
   unmount?(): void;
   /**
+   * 可选：右侧栏（挂在聊天上方）。棋盘之外还想常驻一块信息时用，
+   * 比如这个游戏的牌型顺序。不实现就不占位置。
+   */
+  sidePanel?: {
+    mount(context: GameClientContext): void;
+    update(snapshot: ClientSnapshot): void;
+    unmount?(): void;
+  };
+  /**
    * 把一条日志记录渲染成文字。返回 null 表示"我不认识这条"，宿主会退回显示 key。
    * 放在插件里而不是宿主里，宿主才不会认识任何具体游戏。
    */

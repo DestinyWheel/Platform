@@ -103,13 +103,11 @@ function renderRail(data: GangData): string {
     .join('');
 
   return `
-    <aside class="gang-rail">
-      <div class="gang-rank">
-        <h4>牌型顺序</h4>
-        <ul class="gang-rank-list">${ranks}</ul>
-      </div>
-      ${notes || secrets ? `<div class="gang-notes"><h4>牌桌信息</h4>${notes}${secrets}</div>` : ''}
-    </aside>`;
+    <div class="gang-rank">
+      <h4>牌型顺序</h4>
+      <ul class="gang-rank-list">${ranks}</ul>
+    </div>
+    ${notes || secrets ? `<div class="gang-notes"><h4>牌桌信息</h4>${notes}${secrets}</div>` : ''}`;
 }
 
 function noteText(note: GangData['notes'][number]): string {
@@ -153,20 +151,12 @@ const VALUE_CHOICES = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', '
 
 const CSS = `
 .gang {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 208px;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  align-items: start;
   padding: 4px 0 8px;
   color: #e6edf3;
   font-size: 14px;
-}
-.gang-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.gang-rail { display: flex; flex-direction: column; gap: 10px; position: sticky; top: 12px; }
-@media (max-width: 1080px) {
-  .gang { grid-template-columns: minmax(0, 1fr); }
-  .gang-rail { position: static; }
-  .gang-rank-list { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
 }
 .gang-rank {
   border: 1px solid #262d38;
@@ -659,7 +649,7 @@ function render(): void {
     parts.push(renderControls(data, view), renderGuess(data, view), renderResult(data, view));
   }
 
-  root.innerHTML = `<div class="gang"><div class="gang-main">${parts.join('')}</div>${renderRail(data)}</div>`;
+  root.innerHTML = `<div class="gang">${parts.join('')}</div>`;
 }
 
 function onClick(event: Event): void {
@@ -752,7 +742,34 @@ function formatLog(entry: LogEntry): string | null {
   }
 }
 
-const client: GameClient = { mount, update, unmount, formatLog };
+let sideRoot: HTMLElement | null = null;
+
+function renderSide(): void {
+  if (!sideRoot || !snapshot?.view) return;
+  const data = snapshot.view.data as unknown as GangData;
+  sideRoot.innerHTML = renderRail(data);
+}
+
+/** 右侧栏：牌型顺序 + 牌桌信息，挂在聊天上面 */
+const sidePanel: NonNullable<GameClient['sidePanel']> = {
+  mount(next) {
+    ensureStyle();
+    sideRoot = document.createElement('div');
+    sideRoot.className = 'gang-side-root';
+    next.root.append(sideRoot);
+    renderSide();
+  },
+  update(next) {
+    snapshot = next;
+    renderSide();
+  },
+  unmount() {
+    sideRoot?.remove();
+    sideRoot = null;
+  },
+};
+
+const client: GameClient = { mount, update, unmount, formatLog, sidePanel };
 
 export default client;
 export { client };
