@@ -613,6 +613,7 @@ input:focus {
 .chat-form button {
   padding: 7px 14px;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 /* ---------------- 游戏详情 ---------------- */
