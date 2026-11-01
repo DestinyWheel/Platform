@@ -125,6 +125,8 @@ tests/
 | 备份 | 管理后台「立即备份」，或 `POST /api/admin/backup` —— 整库导出到 `storage/backups/*.json.gz`，只保留最近 14 份（`BACKUP_KEEP`） |
 | 恢复 | `pnpm tsx scripts/restore.mjs <备份文件> [--data-dir <目录>]`（**破坏性**） |
 | 回收插件 | 管理后台「回收闲置 worker」，或 `POST /api/admin/plugins/gc` |
+| 查用户 | `pnpm tsx scripts/users.mjs list` —— 账户、昵称、注册/登录时间、局数、开桌数；线上用 `PGDATA=/opt/boardgame/.data/pg` |
+| 删用户 | `pnpm tsx scripts/users.mjs rm <账户或ID>... [--yes] [--purge-tables]` —— 默认只预演；评分/战绩/关注/私聊/提醒/成就会跟着删（外键级联），牌桌默认保留，加 `--purge-tables` 连他开的桌一起清。跑之前先停服务、`cp -a .data/pg .data/pg.bak-xxx`，跑完再起 |
 
 限流默认全开：登录按 IP、建桌/上传按用户、聊天和动作按 WS 连接。超限返回 `429` + `retry-after`。
 
