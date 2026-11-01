@@ -185,6 +185,25 @@ input:focus {
   padding: 20px 24px 48px;
 }
 
+/*
+ * 页面里的每一段之间都留点距离。
+ *
+ * 以前只靠 h2 自带的下边距撑着，段落一多就全贴在一起了
+ * （「最近一起玩过」和「游戏」之间就是这么贴住的）。
+ * 第一段不加上边距，免得顶栏下面空出一截。
+ */
+.lobby > section {
+  margin-top: 28px;
+}
+
+.lobby > section:first-of-type {
+  margin-top: 0;
+}
+
+.lobby > .lobby-columns {
+  margin-top: 28px;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -1354,13 +1373,7 @@ select.ghost {
 
 /* ---------------- 个人中心 ---------------- */
 
-.user-center > section {
-  margin-bottom: 28px;
-}
-
-.user-center > section:last-of-type {
-  margin-bottom: 0;
-}
+/* 段落之间的间距统一由 `.lobby > section` 那条规则给，这里不再重复 */
 
 .facts {
   display: grid;
@@ -1868,7 +1881,8 @@ button.danger-text {
 /* ---------------- 提醒 ---------------- */
 
 .notice-list {
-  margin-top: 16px;
+  /* 它是「消息」页的第一段，上边距被 first-of-type 清掉了，这里用 padding 补 */
+  padding-top: 20px;
 }
 
 .person-row.unread {
@@ -1891,22 +1905,22 @@ button.danger-text {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   line-height: 1.45;
 }
 
-/* 主页上的各段之间留点呼吸 */
-.profile-page > section {
-  margin-top: 22px;
+.notice-list .person-row {
+  padding: 11px 14px;
 }
 
+/* 主页上的各段之间留点呼吸（间距统一由 `.lobby > section` 给，这里只清掉标题自带的上边距） */
 .profile-page > section > h2 {
   margin-top: 0;
 }
 
-/* 大厅「游戏」标题和搜索框：别贴着上一块 */
-.section-head {
-  margin-top: 20px;
+/* 大厅「游戏」标题和搜索框：同一行，标题不要自带下边距 */
+.section-head h2 {
+  margin-bottom: 0;
 }
 
 /* ---------------- 聊天里的 @ ---------------- */
