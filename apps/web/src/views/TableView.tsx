@@ -116,6 +116,19 @@ export function TableView({
     };
   }, [snapshot?.status, snapshot?.you.isPlayer]);
 
+  // 即时制进行中关页面 = 这局少一个人，提示一下（浏览器只给通用文案）
+  useEffect(() => {
+    if (snapshot?.mode !== 'realtime' || snapshot.status !== 'playing' || !snapshot.you.isPlayer) {
+      return;
+    }
+    const warn = (event: BeforeUnloadEvent): void => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [snapshot?.mode, snapshot?.status, snapshot?.you.isPlayer]);
+
   const invite = async (userId: string): Promise<void> => {
     setBusy(`invite:${userId}`);
     setActionError(null);
@@ -188,6 +201,8 @@ export function TableView({
     try {
       await api.forfeitTable(tableId);
       setConfirming(null);
+      // 认负之后这一局就没你的事了，直接回大厅——不要把人留在"已结束"的死胡同里
+      onExit();
     } catch (err) {
       setActionError((err as Error).message);
       setConfirming(null);
@@ -240,12 +255,15 @@ export function TableView({
   return (
     <div className="table-page">
       <header className="topbar">
-        {/* 即时制没有"回大厅"：人走了这局就没人替他打了，退出等于认负 */}
-        {snapshot.mode === 'realtime' ? null : (
+        {/*
+          即时制进行中没有"回大厅"：人走了这局就没人替他打了，退出等于认负。
+          但**看客**和**已经结束的桌**不该被关在里面。
+        */}
+        {!snapshot.you.isPlayer || snapshot.mode !== 'realtime' || snapshot.status === 'finished' ? (
           <button className="ghost" onClick={onExit}>
             ← 大厅
           </button>
-        )}
+        ) : null}
         <div className="title">
           {snapshot.gameName}
           <span className="muted version">v{snapshot.gameVersion}</span>

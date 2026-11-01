@@ -65,9 +65,12 @@ test('纸牌帮：四档难度的开局形态', () => {
   assert.equal(advanced.stacks.specialist.length, 10);
 
   const pro = createInitialState(theGang, { ...SETUP, options: { mode: 'professional' } }).state;
-  assert.ok(pro.permanent != null, '专业模式有一张整局有效的挑战卡');
+  assert.equal(pro.config.permanent.length, 1, '专业模式有一张整局有效的挑战卡');
   assert.equal(pro.challenge.length, 1);
-  assert.ok(pro.permanent !== 1 && !pro.stacks.challenge.includes(1), '专业模式没有快速通道');
+  assert.ok(
+    !pro.config.permanent.includes(1) && !pro.stacks.challenge.includes(1),
+    '专业模式没有快速通道',
+  );
 
   const master = createInitialState(theGang, { ...SETUP, options: { mode: 'master' } }).state;
   assert.equal(master.alarmsToLose, 2, '大师模式两次警报就输');

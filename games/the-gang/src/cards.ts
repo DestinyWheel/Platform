@@ -5,7 +5,7 @@
  * 一组布尔开关，规则引擎只认这些开关，不散落 if（challenge === 3) 这种判断。
  */
 
-export type GangMode = 'basic' | 'advanced' | 'professional' | 'master';
+export type GangMode = 'basic' | 'advanced' | 'professional' | 'master' | 'custom';
 
 export interface CardInfo {
   name: string;
@@ -31,7 +31,7 @@ export const CHALLENGE: Record<number, CardInfo> = {
   },
   5: {
     name: '匆忙撤离',
-    text: '第三轮不发橙色筹码：翻完第 4 张公共牌直接进河牌轮。',
+    text: '第三轮不发橙色筹码：直接翻出第 4、第 5 张公共牌，接着打河牌轮。',
   },
   6: {
     name: '通风管道',
@@ -107,4 +107,49 @@ export const MODE_NAME: Record<GangMode, string> = {
   advanced: '进阶',
   professional: '专业',
   master: '大师',
+  custom: '自定义',
+};
+
+/**
+ * 自定义模式的配置。
+ *
+ * 四档官方难度其实就是这份配置的四个预设；引擎只读 config，
+ * 不再到处判断 `mode === 'master'` 这种。
+ */
+export interface GangConfig {
+  /** 失败之后发不发专家卡 */
+  specialist: boolean;
+  /** 成功之后抽不抽挑战卡 */
+  challenge: boolean;
+  /** 整局常驻的挑战卡（可以多张） */
+  permanent: number[];
+  /** 挑战卡是否叠加：开=新抽的卡和已有的并存；关=新卡替换掉上一张（常驻的不动） */
+  stack: boolean;
+  /** 抢下几个金库算赢 */
+  vaultsToWin: number;
+  /** 几次警报算输 */
+  alarmsToLose: number;
+}
+
+/** 四档官方难度对应的配置（专业模式常驻那张由开局随机抽） */
+export function configForMode(mode: GangMode, permanent: number | null = null): GangConfig {
+  const skill = mode !== 'basic';
+  return {
+    specialist: skill,
+    challenge: skill,
+    permanent: permanent != null ? [permanent] : [],
+    stack: mode === 'professional' || mode === 'master' || mode === 'custom',
+    vaultsToWin: 3,
+    alarmsToLose: mode === 'master' ? 2 : 3,
+  };
+}
+
+/** 自定义模式的初始配置：看着像进阶，先不锁任何卡 */
+export const DEFAULT_CUSTOM_CONFIG: GangConfig = {
+  specialist: true,
+  challenge: true,
+  permanent: [],
+  stack: true,
+  vaultsToWin: 3,
+  alarmsToLose: 3,
 };

@@ -8,7 +8,7 @@ import type {
   SocialPulse,
   TableSummary,
 } from '@platform/sdk';
-import { api, type Session } from '../api';
+import { ApiError, api, type Session } from '../api';
 import { Avatar } from '../Avatar';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -53,6 +53,13 @@ export function Lobby({
     total: 0,
   });
   const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
+  /** 建桌/匹配被"你已经在即时房间里"挡住时，把那张桌拿出来给两个按钮 */
+  const [busyRoom, setBusyRoom] = useState<{
+    id: string;
+    code: string | null;
+    gameName: string;
+    status: TableSummary['status'];
+  } | null>(null);
 
   const [perGame, setPerGame] = useState<PlayerStatsRow[]>([]);
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
@@ -142,6 +149,29 @@ export function Lobby({
   const winRate = (row: PlayerStatsRow): string =>
     row.games === 0 ? '—' : `${Math.round((row.wins / row.games) * 100)}%`;
 
+  /**
+   * "你已经在即时房间里了"不该只是一句错误。
+   *
+   * 平台确实不让人同时开两张即时桌（一局里人走了，其他人只能干等），
+   * 所以这里把那张桌捞出来，给「回到牌桌 / 认负并离开」两个按钮。
+   */
+  const handleBusyRoom = (err: unknown): void => {
+    if (err instanceof ApiError && err.code === 'already_in_realtime') {
+      const table = mine.find((item) => item.mode === 'realtime' && item.status !== 'finished');
+      if (table) {
+        setBusyRoom({
+          id: table.id,
+          code: table.code,
+          gameName: table.gameName,
+          status: table.status,
+        });
+        setError(null);
+        return;
+      }
+    }
+    setError((err as Error).message);
+  };
+
   const quickMatch = async (): Promise<void> => {
     setBusy('quick');
     setError(null);
@@ -149,7 +179,7 @@ export function Lobby({
       const result = await api.quickMatch();
       onOpen(result.id);
     } catch (err) {
-      setError((err as Error).message);
+      handleBusyRoom(err);
     } finally {
       setBusy(null);
     }
@@ -164,6 +194,21 @@ export function Lobby({
       const { id } = await api.joinByCode(trimmed);
       setRoomCode('');
       onOpen(id);
+    } catch (err) {
+      handleBusyRoom(err);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const leaveBusyRoom = async (): Promise<void> => {
+    if (!busyRoom) return;
+    setBusy('leave-room');
+    setError(null);
+    try {
+      await api.forfeitTable(busyRoom.id);
+      setBusyRoom(null);
+      await refresh();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -198,6 +243,32 @@ export function Lobby({
       </header>
 
       {error ? <div className="error">{error}</div> : null}
+
+      {busyRoom ? (
+        <div className="busy-room">
+          <div>
+            <strong>你还在「{busyRoom.gameName}」房间里</strong>
+            {busyRoom.code ? <span className="room-code">{busyRoom.code}</span> : null}
+            <div className="muted small">
+              {busyRoom.status === 'playing'
+                ? '那局还没结束——回去继续打，或者认负退出。'
+                : '你在这张桌里还没开局，回去等人齐，或者先退出。'}
+            </div>
+          </div>
+          <div className="row">
+            <button className="primary" onClick={() => onOpen(busyRoom.id)}>
+              回到牌桌
+            </button>
+            <button
+              className="ghost"
+              disabled={busy === 'leave-room'}
+              onClick={() => void leaveBusyRoom()}
+            >
+              {busy === 'leave-room' ? '处理中…' : '认负并离开'}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <section className="quick-start">
         <button

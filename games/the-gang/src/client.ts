@@ -18,6 +18,8 @@ interface Seat {
   chip: number;
   name: string;
   best?: string[];
+  /** 只属于这个人的底牌（2 或 3 张） */
+  pocket?: string[];
   hand: string[];
   score: number[];
 }
@@ -44,11 +46,25 @@ interface GuessInfo {
   mine: string | null;
 }
 
+interface GangConfig {
+  specialist: boolean;
+  challenge: boolean;
+  permanent: number[];
+  stack: boolean;
+  vaultsToWin: number;
+  alarmsToLose: number;
+}
+
 interface GangData {
   heist: number;
   vaults: number;
   alarms: number;
   alarmsToLose: number;
+  vaultsToWin: number;
+  config: GangConfig;
+  /** 还在自定义模式的设置阶段 */
+  setup: boolean;
+  catalog: { challenge: CardInfo[]; specialist: CardInfo[] };
   mode: string;
   modeName: string;
   round: number;
@@ -65,7 +81,6 @@ interface GangData {
   challenge: number[];
   challengeInfo: CardInfo[];
   specialist: number | null;
-  permanent: number | null;
   blackoutRounds: number[];
   guess: GuessInfo | null;
   guessOk: boolean | null;
@@ -90,6 +105,64 @@ const RANKS_ORDER = [
   ['一对', '两张同点'],
   ['高牌', '什么都没有'],
 ];
+
+/* ------------------------------------------------------------------ */
+/* 自定义模式：设置面板                                                */
+/* ------------------------------------------------------------------ */
+
+function renderSetup(data: GangData): string {
+  const cfg = data.config;
+  const toggle = (key: 'specialist' | 'challenge' | 'stack', on: boolean, labels: [string, string]) =>
+    `<button class="gang-toggle${on ? ' on' : ''}" data-act="cfg-toggle" data-key="${key}">${on ? labels[0] : labels[1]}</button>`;
+
+  const challengeCards = data.catalog.challenge
+    .map((card) => {
+      const on = cfg.permanent.includes(card.id);
+      return `<button class="gang-perm${on ? ' on' : ''}" data-act="cfg-perm" data-id="${card.id}" title="${card.text}">${card.name}</button>`;
+    })
+    .join('');
+
+  const numbers = (key: 'vaultsToWin' | 'alarmsToLose') =>
+    [1, 2, 3, 4, 5]
+      .map(
+        (value) =>
+          `<button class="gang-num${cfg[key] === value ? ' on' : ''}" data-act="cfg-num" data-key="${key}" data-value="${value}">${value}</button>`,
+      )
+      .join('');
+
+  return `
+    <div class="gang-setup">
+      <h3>自定义模式：先把规则配好</h3>
+      <div class="gang-muted">任何在座的人都能改；配完点最下面的「发牌」。</div>
+
+      <div class="gang-setup-row">
+        <span class="gang-setup-label">专家卡</span>
+        ${toggle('specialist', cfg.specialist, ['有（失败后发一张）', '没有'])}
+      </div>
+      <div class="gang-setup-row">
+        <span class="gang-setup-label">挑战卡</span>
+        ${toggle('challenge', cfg.challenge, ['有（成功后抽一张）', '没有'])}
+      </div>
+      <div class="gang-setup-row">
+        <span class="gang-setup-label">挑战卡叠加</span>
+        ${toggle('stack', cfg.stack, ['开（新卡和已有的并存）', '关（新卡替换上一张）'])}
+      </div>
+      <div class="gang-setup-row column">
+        <span class="gang-setup-label">常驻挑战卡（可多选，从第 1 次抢劫就生效）</span>
+        <div class="gang-perms">${challengeCards}</div>
+      </div>
+      <div class="gang-setup-row">
+        <span class="gang-setup-label">抢几个金库算赢</span>
+        <span class="gang-nums">${numbers('vaultsToWin')}</span>
+      </div>
+      <div class="gang-setup-row">
+        <span class="gang-setup-label">几次警报算输</span>
+        <span class="gang-nums">${numbers('alarmsToLose')}</span>
+      </div>
+
+      <button class="gang-btn success big" data-act="cfg-deal">发牌</button>
+    </div>`;
+}
 
 function renderRail(data: GangData): string {
   const ranks = RANKS_ORDER.map(
@@ -304,6 +377,38 @@ const CSS = `
 .gang-seat-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .gang-seat-line .order { width: 22px; color: #8b98a7; font-size: 12px; }
 .gang-seat-line.bad { background: rgba(248, 81, 73, 0.1); border-radius: 8px; padding: 4px 6px; }
+/* 摊牌：左边最优 5 张，右边底牌 */
+.gang-sep { color: #55637a; font-size: 16px; margin: 0 4px; }
+.gang-row.pocket { padding-left: 10px; border-left: 1px solid #2c3745; }
+
+/* 自定义模式：设置面板 */
+.gang-setup {
+  border: 1px solid #2c3745; border-radius: 14px; padding: 16px;
+  background: rgba(20, 25, 32, 0.92);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.gang-setup h3 { margin: 0; font-size: 16px; }
+.gang-setup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gang-setup-row.column { flex-direction: column; align-items: flex-start; gap: 6px; }
+.gang-setup-label { color: #8b98a7; font-size: 13px; min-width: 132px; }
+.gang-toggle {
+  padding: 6px 14px; border-radius: 99px; border: 1px solid #2c3745;
+  background: #1a212b; color: #c3ccd8; cursor: pointer; font-size: 13px;
+}
+.gang-toggle.on { border-color: #4c8dff; color: #fff; background: rgba(76, 141, 255, 0.18); }
+.gang-perms { display: flex; flex-wrap: wrap; gap: 6px; }
+.gang-perm {
+  padding: 5px 10px; border-radius: 8px; border: 1px solid #2c3745;
+  background: #1a212b; color: #9aa7b6; cursor: pointer; font-size: 12px;
+}
+.gang-perm.on { border-color: #d9a521; color: #f0d68a; background: rgba(217, 165, 33, 0.14); }
+.gang-nums { display: flex; gap: 6px; }
+.gang-num {
+  width: 34px; height: 32px; border-radius: 8px; border: 1px solid #2c3745;
+  background: #1a212b; color: #9aa7b6; cursor: pointer;
+}
+.gang-num.on { border-color: #4c8dff; color: #fff; background: rgba(76, 141, 255, 0.18); }
+.gang-btn.big { padding: 12px 20px; font-size: 15px; align-self: flex-start; }
 .gang-empty { color: #8b98a7; font-size: 13px; }
 `;
 
@@ -348,15 +453,16 @@ function dots(filled: number, total: number, kind: string): string {
 }
 
 function renderTop(data: GangData): string {
+  const setup = data.setup;
   return `
     <div class="gang-top">
-      <div class="gang-heist">第 ${data.heist} 次抢劫</div>
+      <div class="gang-heist">${setup ? '准备开局' : `第 ${data.heist} 次抢劫`}</div>
       <span class="gang-mode">${data.modeName ?? ''}</span>
       <div class="gang-progress">
-        <span>金库 ${dots(data.vaults, 3, 'vault')}</span>
+        <span>金库 ${dots(data.vaults, data.vaultsToWin ?? 3, 'vault')}</span>
         <span>警报 ${dots(data.alarms, data.alarmsToLose ?? 3, 'alarm')}</span>
       </div>
-      <div class="gang-round">${ROUND_NAME[data.round - 1] ?? ''} · ${CHIP_NAME[data.round] ?? ''}筹码</div>
+      ${setup ? '' : `<div class="gang-round">${ROUND_NAME[data.round - 1] ?? ''} · ${CHIP_NAME[data.round] ?? ''}筹码</div>`}
     </div>`;
 }
 
@@ -516,14 +622,19 @@ function renderResult(data: GangData, view: PublicView): string {
   const lines = last.seats
     .map((seat, index) => {
       const bad = last.badAt === index;
-      const cards = (seat.best ?? seat.hand).map((card) => cardHtml(card)).join('');
+      const best = (seat.best ?? seat.hand).map((card) => cardHtml(card)).join('');
+      const pocket = (seat.pocket ?? []).map((card) => cardHtml(card)).join('');
+      // 左边是凑成牌型的那 5 张，右边是他的底牌：一眼看出"这手牌是怎么来的"
+      const cards = pocket
+        ? `<span class="gang-row">${best}</span><span class="gang-sep">|</span><span class="gang-row pocket">${pocket}</span>`
+        : `<span class="gang-row">${best}</span>`;
       return `
         <div class="gang-seat-line${bad ? ' bad' : ''}">
           <span class="order">${index + 1}</span>
           <span class="gang-chip r on">${seat.chip}</span>
           <strong>${nameOf(seat.player)}</strong>
           <span>${seat.name}</span>
-          <span class="gang-row">${cards}</span>
+          ${cards}
         </div>`;
     })
     .join('');
@@ -545,7 +656,7 @@ function renderResult(data: GangData, view: PublicView): string {
     <div class="gang-result ${last.ok ? 'ok' : 'fail'}">
       <h3>${title}</h3>
       ${guessLine}
-      <div class="gang-muted">按红筹码从小到大亮牌</div>
+      <div class="gang-muted">按红筹码从小到大亮牌，左边是凑成牌型的那 5 张，右边是底牌</div>
       ${lines}
       ${footer}
     </div>`;
@@ -553,9 +664,11 @@ function renderResult(data: GangData, view: PublicView): string {
 
 function renderFinish(data: GangData): string {
   if (data.win == null) return '';
+  const need = data.vaultsToWin ?? 3;
+  const limit = data.alarmsToLose ?? 3;
   return `
     <div class="gang-result ${data.win ? 'ok' : 'fail'}">
-      <h3>${data.win ? '三个金库到手，你们赢了' : '三次警报，这次栽了'}</h3>
+      <h3>${data.win ? `${need} 个金库到手，你们赢了` : `${limit} 次警报，这次栽了`}</h3>
       <div class="gang-muted">合作局，不计分。想再来一次就回大厅开新桌。</div>
     </div>`;
 }
@@ -634,6 +747,13 @@ function render(): void {
   }
 
   const data = view.data as unknown as GangData;
+
+  // 自定义模式：还没发牌，只画设置面板
+  if (data.setup) {
+    root.innerHTML = `<div class="gang">${renderTop(data)}${renderSetup(data)}</div>`;
+    return;
+  }
+
   const parts = [
     renderTop(data),
     renderCards(data),
@@ -691,6 +811,29 @@ function onClick(event: Event): void {
   } else if (act === 'spec-discard') {
     const index = Number(target.dataset.index);
     if (Number.isFinite(index)) context.send({ type: 'discard', payload: { index } });
+  } else if (act === 'cfg-toggle') {
+    const key = target.dataset.key as 'specialist' | 'challenge' | 'stack';
+    const cfg = (snapshot?.view?.data as unknown as GangData | undefined)?.config;
+    if (cfg && typeof cfg[key] === 'boolean') {
+      context.send({ type: 'configure', payload: { [key]: !cfg[key] } });
+    }
+  } else if (act === 'cfg-perm') {
+    const id = Number(target.dataset.id);
+    const cfg = (snapshot?.view?.data as unknown as GangData | undefined)?.config;
+    if (cfg && Number.isFinite(id)) {
+      const next = cfg.permanent.includes(id)
+        ? cfg.permanent.filter((item) => item !== id)
+        : [...cfg.permanent, id];
+      context.send({ type: 'configure', payload: { permanent: next } });
+    }
+  } else if (act === 'cfg-num') {
+    const key = target.dataset.key as 'vaultsToWin' | 'alarmsToLose';
+    const value = Number(target.dataset.value);
+    if (key && Number.isFinite(value)) {
+      context.send({ type: 'configure', payload: { [key]: value } });
+    }
+  } else if (act === 'cfg-deal') {
+    context.send({ type: 'deal', payload: {} });
   }
 }
 
@@ -735,8 +878,14 @@ function formatLog(entry: LogEntry): string | null {
       return `✗ 第 ${args.heist} 次抢劫失败，警报卡翻红`;
     case 'thegang.heist':
       return `第 ${args.heist} 次抢劫开始`;
+    case 'thegang.configure':
+      return '规则设置更新了';
+    case 'thegang.deal':
+      return `发牌：${args.challenge ? '带挑战卡' : '无挑战卡'}${args.specialist ? '、带专家卡' : ''}，${args.vaultsToWin} 个金库 / ${args.alarmsToLose} 次警报`;
     case 'thegang.gameEnd':
-      return args.win ? '三个金库到手，赢了' : '三次警报，输了';
+      return args.win
+        ? `${args.target ?? 3} 个金库到手，赢了`
+        : `${args.limit ?? 3} 次警报，输了`;
     default:
       return null;
   }

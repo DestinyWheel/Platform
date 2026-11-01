@@ -23,7 +23,7 @@ import type {
 } from '@platform/sdk';
 import rawManifest from '../manifest.json';
 import { type Card, cardLabel, categoryName, compareScores, evaluateWithBest, makeDeck, shuffle } from './poker';
-import { CHALLENGE, effectsOf, MODE_NAME, SPECIALIST, type ChallengeEffects, type GangMode } from './cards';
+import { CHALLENGE, effectsOf, MODE_NAME, SPECIALIST, configForMode, DEFAULT_CUSTOM_CONFIG, type ChallengeEffects, type GangConfig, type GangMode } from './cards';
 
 const manifest = rawManifest as GameManifest;
 
@@ -41,6 +41,8 @@ export interface HeistSeat {
   name: string;
   /** 摊牌时展示用的 5 张（7 选 5 里真正凑成牌型的那 5 张） */
   best: string[];
+  /** 这个人的底牌（2 或 3 张），摊牌时和 best 并排展示 */
+  pocket: string[];
   hand: string[];
   /** 打手：同牌型压别人 */
   muscle?: boolean;
@@ -74,6 +76,8 @@ export interface GangState extends BaseState {
   alarms: number;
   alarmsToLose: number;
   mode: GangMode;
+  /** 这一局的规则配置：四档官方难度是它的预设，自定义模式直接改它 */
+  config: GangConfig;
   deck: Card[];
   community: Card[];
   hands: Record<PlayerId, Card[]>;
@@ -88,8 +92,6 @@ export interface GangState extends BaseState {
   /** 本次抢劫生效的挑战卡（0~2 张） */
   challenge: number[];
   specialist: number | null;
-  /** 专业模式整局有效的那张挑战卡 */
-  permanent: number | null;
   stacks: { challenge: number[]; specialist: number[] };
   /** 从 challenge 算出来的规则开关 */
   effects: ChallengeEffects;
@@ -502,7 +504,80 @@ const discardCard: ActionDef<GangState> = {
   },
 };
 
+/* ------------------------------------------------------------------ */
+/* 自定义模式：开桌之后在牌桌里配                                       */
+/* ------------------------------------------------------------------ */
+
+const configSchema = z.object({
+  /** 失败之后发不发专家卡 */
+  specialist: z.boolean().optional(),
+  /** 成功之后抽不抽挑战卡 */
+  challenge: z.boolean().optional(),
+  /** 常驻挑战卡（1–10，可以多张） */
+  permanent: z.array(z.number().int().min(1).max(10)).max(10).optional(),
+  /** 挑战卡是否叠加 */
+  stack: z.boolean().optional(),
+  /** 抢下几个金库算赢 */
+  vaultsToWin: z.number().int().min(1).max(5).optional(),
+  /** 几次警报算输 */
+  alarmsToLose: z.number().int().min(1).max(5).optional(),
+});
+
+/** 改配置：任何在座的人都能改（合作局，谁改都一样），只在设置阶段有用 */
+const configure: ActionDef<GangState> = {
+  allowedIn: ['setup'],
+  schema: configSchema,
+  validate(state, action, ctx) {
+    if (!state.players.includes(ctx.playerId)) return { ok: false, reason: 'not.in.table' };
+    const patch = action.payload as Partial<GangConfig>;
+    if (patch.permanent && new Set(patch.permanent).size !== patch.permanent.length) {
+      return { ok: false, reason: 'setup.duplicate' };
+    }
+    return { ok: true };
+  },
+  reduce(state, action, ctx) {
+    const patch = action.payload as Partial<GangConfig>;
+    state.config = { ...state.config, ...patch };
+    // 常驻挑战卡排序一下，界面和日志都好读
+    state.config.permanent = [...new Set(state.config.permanent)].sort((left, right) => left - right);
+    state.alarmsToLose = state.config.alarmsToLose;
+    ctx.emit({ type: 'log', key: 'thegang.configure', args: { ...state.config } });
+  },
+};
+
+/** 配好了，发牌开打 */
+const deal: ActionDef<GangState> = {
+  allowedIn: ['setup'],
+  schema: z.object({}),
+  validate(state, action, ctx) {
+    if (!state.players.includes(ctx.playerId)) return { ok: false, reason: 'not.in.table' };
+    return { ok: true };
+  },
+  reduce(state, _action, ctx) {
+    // 建两个牌堆：常驻的挑出来，剩下的按 1–10 顺序当抽牌堆
+    const all = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    const permanents = state.config.permanent;
+    state.challenge = [...permanents];
+    state.stacks.challenge = all.filter((id) => !permanents.includes(id));
+    state.stacks.specialist = state.config.specialist ? [...all] : [];
+    state.specialist = null;
+    dealHeist(state, ctx.rng);
+    ctx.emit({ type: 'log', key: 'thegang.deal', args: { ...state.config } });
+    ctx.goTo('draft');
+  },
+};
+
 const states: Record<string, StateDef<GangState>> = {
+  /**
+   * 自定义模式的设置阶段：任何在座的人都能改配置，改完点「发牌」。
+   *
+   * 用 global 而不是 activePlayer：这一阶段不该吃平台的回合超时
+   * （人还在看设置面板，不该被自动替走一手）。
+   */
+  setup: {
+    type: 'global',
+  },
+
   /** 每轮同时抢筹码。activePlayer 只是用来复用平台的超时兜底，任何人都能随时动。 */
   draft: {
     type: 'activePlayer',
@@ -541,9 +616,12 @@ const states: Record<string, StateDef<GangState>> = {
       }
 
       if (state.effects.skipThird && state.round === 2) {
-        // 匆忙撤离：不发橙色筹码，翻第 4 张直接进河牌轮
-        const card = state.deck.pop();
-        if (card) state.community.push(card);
+        // 匆忙撤离：第三轮不发橙色筹码，但转牌和河牌都要翻出来，
+        // 否则河牌轮手里只有 4 张公共牌，摊牌就错了
+        for (let index = 0; index < 2; index += 1) {
+          const card = state.deck.pop();
+          if (card) state.community.push(card);
+        }
         state.round = 4;
         ctx.emit({
           type: 'log',
@@ -639,6 +717,7 @@ const states: Record<string, StateDef<GangState>> = {
           name: categoryName(score),
           hand: cards.map(cardLabel),
           best: best.map(cardLabel),
+          pocket: (state.hands[player] ?? []).map(cardLabel),
           muscle: state.muscle === player,
         };
         if (previous && stronger(seat, previous) < 0 && badAt === null) badAt = index;
@@ -693,7 +772,7 @@ const states: Record<string, StateDef<GangState>> = {
       if (state.last?.ok) state.vaults += 1;
       else state.alarms += 1;
 
-      const over = state.vaults >= 3 || state.alarms >= state.alarmsToLose;
+      const over = state.vaults >= state.config.vaultsToWin || state.alarms >= state.config.alarmsToLose;
       if (over) {
         state.finished = true;
         // 合作局：不排名 → 平台不会记 Elo、也不会写战绩
@@ -702,15 +781,16 @@ const states: Record<string, StateDef<GangState>> = {
           type: 'log',
           key: 'thegang.gameEnd',
           args: {
-            win: state.vaults >= 3,
+            win: state.vaults >= state.config.vaultsToWin,
             vaults: state.vaults,
             alarms: state.alarms,
-            limit: state.alarmsToLose,
+            limit: state.config.alarmsToLose,
+            target: state.config.vaultsToWin,
           },
         });
 
-        // 成就：三个人一起赢下来才叫「全身而退」
-        if (state.vaults >= 3) {
+        // 成就：赢下来才叫「全身而退」
+        if (state.vaults >= state.config.vaultsToWin) {
           for (const player of state.players) {
             ctx.emit({ type: 'achievement', player, key: 'clean-getaway' });
             if (state.alarms === 0) {
@@ -753,22 +833,31 @@ function prepareNextHeist(state: GangState, ctx: ActionContext<GangState>): void
     return;
   }
 
-  if (state.mode !== 'advanced' && state.mode !== 'professional') return;
+  if (state.mode === 'basic') return;
 
   // 专家卡只生效一次，用完回底部
   if (state.specialist != null) {
     state.stacks.specialist.push(state.specialist);
     state.specialist = null;
   }
-  // 挑战卡同理；专业模式那张常驻的不退
-  const perHeist = state.challenge.filter((id) => id !== state.permanent);
-  for (const id of perHeist) state.stacks.challenge.push(id);
-  state.challenge = state.permanent != null ? [state.permanent] : [];
+
+  const permanents = state.config.permanent;
+  const perHeist = state.challenge.filter((id) => !permanents.includes(id));
+
+  if (!state.config.stack) {
+    // 不叠加：这一抢的挑战卡退回牌堆底部，只留常驻的
+    for (const id of perHeist) state.stacks.challenge.push(id);
+    state.challenge = [...permanents];
+  }
+  // 叠加打开什么都不用做：已经抽到的卡继续生效，下一抢再往上加
 
   if (state.last?.ok) {
-    const next = state.stacks.challenge.shift();
-    if (next != null) state.challenge = [...state.challenge, next];
-  } else if (state.mode === 'advanced') {
+    if (state.config.challenge) {
+      const next = state.stacks.challenge.shift();
+      if (next != null) state.challenge = [...state.challenge, next];
+    }
+  } else if (state.config.specialist) {
+    // 进阶 / 专业 / 自定义：失败给专家卡
     const next = state.stacks.specialist.shift();
     if (next != null) state.specialist = next;
   }
@@ -816,25 +905,30 @@ const theGang: GamePlugin<GangState> = {
   createState({ players, options, seed }) {
     const rawMode = String(options.mode ?? 'advanced');
     const mode: GangMode =
-      rawMode === 'basic' || rawMode === 'professional' || rawMode === 'master'
+      rawMode === 'basic' || rawMode === 'professional' || rawMode === 'master' || rawMode === 'custom'
         ? rawMode
         : 'advanced';
 
     const rng = seededRandom(seed);
     const fullChallenge = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    /** 自定义：开局停在「设置」阶段，配好再发牌 */
+    const custom = mode === 'custom';
+    const config: GangConfig = custom ? { ...DEFAULT_CUSTOM_CONFIG } : configForMode(mode);
+
     const state: GangState = {
       players: [...players],
       turn: 0,
       round: 1,
-      phase: 'draft',
+      phase: custom ? 'setup' : 'draft',
       finished: false,
       ranking: null,
       rngSeed: seed >>> 0,
       heist: 1,
       vaults: 0,
       alarms: 0,
-      alarmsToLose: mode === 'master' ? 2 : 3,
+      alarmsToLose: config.alarmsToLose,
       mode,
+      config,
       deck: [],
       community: [],
       hands: zeroed(players, []),
@@ -845,7 +939,6 @@ const theGang: GamePlugin<GangState> = {
       history: [],
       challenge: [],
       specialist: null,
-      permanent: null,
       stacks: { challenge: [], specialist: [] },
       effects: effectsOf([]),
       blackoutRounds: [],
@@ -860,6 +953,8 @@ const theGang: GamePlugin<GangState> = {
       guessOk: null,
     };
 
+    if (custom) return state;
+
     if (mode !== 'basic') {
       // 专业 / 大师模式把「快速通道」抽掉
       const pool = mode === 'advanced' ? [...fullChallenge] : fullChallenge.filter((id) => id !== 1);
@@ -867,9 +962,10 @@ const theGang: GamePlugin<GangState> = {
       state.stacks.specialist = mode === 'master' ? [] : [...fullChallenge];
 
       if (mode === 'professional') {
-        state.permanent = pickRandom(pool, rng) ?? null;
-        state.stacks.challenge = pool.filter((id) => id !== state.permanent);
-        state.challenge = state.permanent != null ? [state.permanent] : [];
+        const permanent = pickRandom(pool, rng) ?? null;
+        state.config.permanent = permanent != null ? [permanent] : [];
+        state.stacks.challenge = pool.filter((id) => id !== permanent);
+        state.challenge = permanent != null ? [permanent] : [];
       }
 
       if (mode === 'master') {
@@ -893,6 +989,8 @@ const theGang: GamePlugin<GangState> = {
     guess: submitGuess,
     useSpecialist,
     discard: discardCard,
+    configure,
+    deal,
   },
 
   view(state, viewer): PublicView {
@@ -916,7 +1014,15 @@ const theGang: GamePlugin<GangState> = {
         heist: state.heist,
         vaults: state.vaults,
         alarms: state.alarms,
-        alarmsToLose: state.alarmsToLose,
+        alarmsToLose: state.config.alarmsToLose,
+        vaultsToWin: state.config.vaultsToWin,
+        config: state.config,
+        setup: state.phase === 'setup',
+        /** 设置阶段要给所有人看完整的卡表（含未启用的） */
+        catalog: {
+          challenge: Object.entries(CHALLENGE).map(([id, info]) => ({ id: Number(id), ...info })),
+          specialist: Object.entries(SPECIALIST).map(([id, info]) => ({ id: Number(id), ...info })),
+        },
         mode: state.mode,
         modeName: MODE_NAME[state.mode],
         round: Math.min(state.round, 4),
@@ -942,7 +1048,6 @@ const theGang: GamePlugin<GangState> = {
         secrets: state.secrets[viewer as string] ?? [],
         pending: state.pending ? { player: state.pending.player, kind: state.pending.kind } : null,
         muscle: state.muscle,
-        permanent: state.permanent,
         blackoutRounds: state.blackoutRounds,
         guess: state.guess
           ? {

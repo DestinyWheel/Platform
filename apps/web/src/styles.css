@@ -447,6 +447,24 @@ input:focus {
   flex-wrap: wrap;
 }
 
+/* 大厅：还占着一张即时桌时的提示卡 */
+.busy-room {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border: 1px solid rgba(217, 165, 33, 0.45);
+  border-radius: 12px;
+  background: rgba(217, 165, 33, 0.08);
+}
+
+.busy-room .room-code {
+  margin-left: 8px;
+}
+
 /* ---------------- 骰子 ---------------- */
 
 .dice {
