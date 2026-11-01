@@ -72,6 +72,14 @@ test('检索人：昵称片段和编号都能查', async () => {
 
   const byFull = await store.searchUsers(`王小明#${user.tag}`, 10);
   assert.ok(byFull.some((row) => row.id === user.id), '整串 名字#编号 也能查');
+
+  // 只写 #编号 时不能退化成"匹配所有人"（空串在 SQL 里 position = 1）
+  const byTagOnly = await store.searchUsers(`#${user.tag}`, 10);
+  assert.deepEqual(
+    byTagOnly.map((row) => row.id),
+    [user.id],
+    '只写 #编号 只能查到这一个人',
+  );
 });
 
 /* ------------------------------ 关注 ------------------------------ */

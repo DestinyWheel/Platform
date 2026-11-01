@@ -555,7 +555,7 @@ export class PgStore implements Store {
 
     const rows = await this.db.query<UserRow>(
       `SELECT ${USER_COLUMNS} FROM users
-        WHERE position(lower($1) in lower(name)) > 0
+        WHERE ($1 <> '' AND position(lower($1) in lower(name)) > 0)
            OR ($2 <> '' AND tag = $2)
         ORDER BY (lower(name) = lower($1)) DESC, created_at ASC
         LIMIT $3`,
