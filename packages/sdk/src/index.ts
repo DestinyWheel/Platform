@@ -283,6 +283,95 @@ export interface LeaderboardEntry {
   games: number;
 }
 
+/* ------------------------- 用户 / 社交 ------------------------- */
+
+/**
+ * 昵称可以重复，所以「名字」不再是身份，#编号 才是。
+ *
+ * 展示一律用 `name`（服务端已经拼好 `名字#编号`），需要拆开时用 `tag`。
+ */
+export interface UserCard {
+  id: PlayerId;
+  /** 展示名，形如 `张三#4821` */
+  name: string;
+  /** 4–6 位数字编号，全局唯一 */
+  tag: string;
+}
+
+export interface DirectMessage {
+  id: string;
+  from: PlayerId;
+  to: PlayerId;
+  body: string;
+  at: number;
+  /** 对方读过的时间；null = 还没读 */
+  readAt: number | null;
+}
+
+/** 会话列表里的一行（按对方聚合，不按消息） */
+export interface DirectThread {
+  user: UserCard;
+  last: DirectMessage | null;
+  unread: number;
+  /** 我们之间有一方拉黑了对方 */
+  blocked: boolean;
+}
+
+export interface FollowGroup {
+  id: string;
+  name: string;
+  sort: number;
+}
+
+export interface FollowedUser extends UserCard {
+  groupId: string | null;
+  /** 特别关注：列表置顶、消息提醒不被折叠 */
+  special: boolean;
+  at: number;
+}
+
+export interface SocialOverview {
+  groups: FollowGroup[];
+  following: FollowedUser[];
+  followers: (UserCard & { at: number })[];
+  blocked: UserCard[];
+}
+
+/** 首页铃铛上的数字 */
+export interface SocialPulse {
+  /** 未读私聊条数 */
+  unreadDms: number;
+  /** 上次看消息之后新关注我的人 */
+  newFollowers: number;
+  total: number;
+}
+
+export interface UserProfile extends UserCard {
+  createdAt: number;
+  stats: PlayerStatsRow[];
+  following: boolean;
+  followedBy: boolean;
+  /** 关注时他所在的（我的）分组 */
+  groupId: string | null;
+  /** 我给他标的特别关注 */
+  special: boolean;
+  /** 我拉黑了他 */
+  blocked: boolean;
+  /** 他拉黑了我 */
+  blocksMe: boolean;
+  followerCount: number;
+  followingCount: number;
+}
+
+/** 管理端：某个游戏的完整榜单（含被隐藏的） */
+export interface AdminRatingRow {
+  userId: PlayerId;
+  name: string;
+  rating: number;
+  games: number;
+  hidden: boolean;
+}
+
 export interface PlayerStatsRow {
   gameId: string;
   gameName: string;
@@ -431,11 +520,18 @@ export type ClientMessage =
 export type ServerMessage =
   | { t: 'snapshot'; snapshot: TableSnapshot }
   | { t: 'error'; code: string; message: string }
-  | { t: 'pong' };
+  | { t: 'pong' }
+  /** 有人私聊我：直接推到对方那条连接上 */
+  | { t: 'dm'; message: DirectMessage }
+  /** 关注 / 未读变化，前端拿它刷新铃铛 */
+  | { t: 'social'; pulse: SocialPulse };
 
 export interface AuthUser {
   id: PlayerId;
+  /** 展示名，已带 `#编号` */
   name: string;
+  /** 4–6 位数字编号 */
+  tag: string;
   /** 管理员才有的管理端入口（插件上传、指标、备份） */
   isAdmin?: boolean;
 }

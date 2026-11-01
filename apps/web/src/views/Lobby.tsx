@@ -4,6 +4,7 @@ import type {
   LeaderboardEntry,
   PlayerStatsRow,
   RecentMatchRow,
+  SocialPulse,
   TableSummary,
 } from '@platform/sdk';
 import { api, type Session } from '../api';
@@ -23,6 +24,7 @@ export function Lobby({
   onUser,
   onGame,
   onDocs,
+  onMessages,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
@@ -32,11 +34,14 @@ export function Lobby({
   onUser: () => void;
   onGame: (gameId: string) => void;
   onDocs: () => void;
+  onMessages: () => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [mine, setMine] = useState<TableSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [gameQuery, setGameQuery] = useState('');
+  const [pulse, setPulse] = useState<SocialPulse>({ unreadDms: 0, newFollowers: 0, total: 0 });
 
   const [perGame, setPerGame] = useState<PlayerStatsRow[]>([]);
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
@@ -70,6 +75,37 @@ export function Lobby({
       })
       .catch(() => undefined);
   }, []);
+
+  // 铃铛：未读私聊 + 新粉丝。10 秒一次，够用又不吵
+  useEffect(() => {
+    let cancelled = false;
+    const load = (): void => {
+      api
+        .pulse()
+        .then((data) => {
+          if (!cancelled) setPulse(data.pulse);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  /** 游戏搜索：名字、简介、标签里命中都算 */
+  const keyword = gameQuery.trim().toLowerCase();
+  const visibleGames =
+    keyword === ''
+      ? games
+      : games.filter((game) =>
+          [game.name, game.description ?? '', ...game.tags]
+            .join(' ')
+            .toLowerCase()
+            .includes(keyword),
+        );
 
   /** 只有计 Elo 的游戏摆排行榜：合作游戏（manifest 里 `elo: false`）不该出现在这儿 */
   const rankedGames = games.filter((game) => game.elo !== false);
@@ -129,6 +165,10 @@ export function Lobby({
           {session.user.name}
           {session.user.isAdmin ? ' · 管理员' : ''}
         </span>
+        <button className="ghost bell" onClick={onMessages} title="消息">
+          消息
+          {pulse.total > 0 ? <span className="bell-count">{pulse.total > 99 ? '99+' : pulse.total}</span> : null}
+        </button>
         <button className="ghost" onClick={onUser}>
           个人中心
         </button>
@@ -206,9 +246,18 @@ export function Lobby({
       ) : null}
 
       <section>
-        <h2>游戏</h2>
+        <div className="section-head">
+          <h2>游戏</h2>
+          <input
+            className="game-search"
+            value={gameQuery}
+            onChange={(event) => setGameQuery(event.target.value)}
+            placeholder="搜游戏：名字、标签、简介"
+            aria-label="搜索游戏"
+          />
+        </div>
         <div className="game-grid">
-          {games.map((game) => {
+          {visibleGames.map((game) => {
             const { min, max } = game.players;
             return (
               <button
@@ -235,7 +284,11 @@ export function Lobby({
               </button>
             );
           })}
-          {games.length === 0 ? <div className="muted">还没有注册任何游戏</div> : null}
+          {visibleGames.length === 0 ? (
+            <div className="muted">
+              {games.length === 0 ? '还没有注册任何游戏' : `没有匹配「${gameQuery.trim()}」的游戏`}
+            </div>
+          ) : null}
         </div>
       </section>
 

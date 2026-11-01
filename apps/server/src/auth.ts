@@ -34,6 +34,8 @@ export class AuthError extends Error {
     public readonly code: string,
     message: string,
     public readonly status = 400,
+    /** 附加数据，原样回给前端（比如重名时的候选人列表） */
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = 'AuthError';

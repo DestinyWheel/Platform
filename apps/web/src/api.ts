@@ -1,15 +1,24 @@
 import type {
   AdminOverview,
   AdminPluginVersion,
+  AdminRatingRow,
   AdminUserRow,
   AuthUser,
+  DirectMessage,
+  DirectThread,
+  FollowedUser,
+  FollowGroup,
   GameManifest,
   LeaderboardEntry,
   PlayerStatsRow,
   RecentMatchRow,
   ReplayPayload,
+  SocialOverview,
+  SocialPulse,
   TableSnapshot,
   TableSummary,
+  UserCard,
+  UserProfile,
 } from '@platform/sdk';
 
 const SESSION_KEY = 'platform.session';
@@ -61,6 +70,8 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly status: number,
+    /** 服务端附带的额外数据（比如重名时的候选人列表） */
+    public readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -87,7 +98,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (response.status === 401) onUnauthorized?.();
     const code = (body as { code?: string }).code ?? 'http_error';
     const message = (body as { message?: string }).message ?? `请求失败 (${response.status})`;
-    throw new ApiError(code, message, response.status);
+    const details = (body as { details?: unknown }).details;
+    throw new ApiError(code, message, response.status, details);
   }
   return body as T;
 }
@@ -119,7 +131,7 @@ export const api = {
     request<{
       code: string | null;
       createdAt: number | null;
-      invited: { id: string; name: string; createdAt: number }[];
+      invited: { id: string; name: string; tag: string; createdAt: number }[];
     }>('/me/invite'),
 
   /** 生成我的邀请码，只能生成一次；已经有了服务端回 409 */
@@ -217,6 +229,72 @@ export const api = {
       `/leaderboard?gameId=${encodeURIComponent(gameId)}`,
     ),
 
+  /* ------------------------------ 用户 / 社交 ------------------------------ */
+
+  /** 按昵称片段或 #编号 找人 */
+  searchUsers: (query: string) =>
+    request<{ users: UserCard[] }>(`/users/search?q=${encodeURIComponent(query)}`),
+
+  userProfile: (id: string) => request<{ profile: UserProfile }>(`/users/${encodeURIComponent(id)}`),
+
+  /** 首页铃铛：未读私聊 + 新关注 */
+  pulse: () => request<{ pulse: SocialPulse }>('/social/pulse'),
+
+  /** 打开消息页：把所有提醒标记成已读 */
+  markSeen: () => request<{ pulse: SocialPulse }>('/social/seen', { method: 'POST' }),
+
+  socialOverview: () => request<SocialOverview>('/social/overview'),
+
+  followUser: (userId: string, options: { groupId?: string | null; special?: boolean } = {}) =>
+    request<{ following: FollowedUser }>('/social/follow', {
+      method: 'POST',
+      body: JSON.stringify({ userId, ...options }),
+    }),
+
+  unfollowUser: (userId: string) =>
+    request<{ ok: true }>(`/social/follow/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+
+  updateFollow: (userId: string, patch: { groupId?: string | null; special?: boolean }) =>
+    request<{ following: FollowedUser }>(`/social/follow/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  createGroup: (name: string) =>
+    request<{ group: FollowGroup }>('/social/groups', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+
+  renameGroup: (id: string, name: string) =>
+    request<{ ok: true }>(`/social/groups/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+
+  deleteGroup: (id: string) =>
+    request<{ ok: true }>(`/social/groups/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  blockUser: (id: string) =>
+    request<{ ok: true }>(`/social/block/${encodeURIComponent(id)}`, { method: 'POST' }),
+
+  unblockUser: (id: string) =>
+    request<{ ok: true }>(`/social/block/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /* ------------------------------ 私聊 ------------------------------ */
+
+  dmThreads: () => request<{ threads: DirectThread[]; pulse: SocialPulse }>('/dm'),
+
+  /** 打开某个会话：顺带把对方发来的消息标成已读 */
+  dmMessages: (userId: string) =>
+    request<{ user: UserCard; messages: DirectMessage[] }>(`/dm/${encodeURIComponent(userId)}`),
+
+  sendDm: (userId: string, body: string) =>
+    request<{ message: DirectMessage }>(`/dm/${encodeURIComponent(userId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    }),
+
   /* ------------------------------ 管理端 ------------------------------ */
 
   adminOverview: () => request<AdminOverview>('/admin/overview'),
@@ -248,6 +326,18 @@ export const api = {
     request<{ games: string[] }>('/admin/plugins/republish', { method: 'POST' }),
 
   adminUsers: () => request<{ users: AdminUserRow[] }>('/admin/users'),
+
+  /** 某个游戏的完整榜单（含被隐藏的人） */
+  adminRatings: (gameId: string) =>
+    request<{ gameId: string; rows: AdminRatingRow[] }>(
+      `/admin/ratings?gameId=${encodeURIComponent(gameId)}`,
+    ),
+
+  adminHideRating: (gameId: string, userId: string, hidden: boolean) =>
+    request<{ ok: true }>('/admin/ratings/hide', {
+      method: 'POST',
+      body: JSON.stringify({ gameId, userId, hidden }),
+    }),
 
   adminSetAdmin: (id: string, isAdmin: boolean) =>
     request<{ ok: true }>(`/admin/users/${encodeURIComponent(id)}/admin`, {

@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AdminOverview, AdminPluginVersion, AdminUserRow } from '@platform/sdk';
+import type {
+  AdminOverview,
+  AdminPluginVersion,
+  AdminRatingRow,
+  AdminUserRow,
+  GameManifest,
+} from '@platform/sdk';
 import { ApiError, api, type Session } from '../api';
 import { copyText } from '../clipboard';
 
-type Tab = 'overview' | 'plugins' | 'users';
+type Tab = 'overview' | 'plugins' | 'users' | 'ratings';
 
 const TAB_LABEL: Record<Tab, string> = {
   overview: '概览',
   plugins: '插件',
   users: '用户',
+  ratings: '排行榜',
 };
 
 const STATUS_LABEL: Record<AdminPluginVersion['status'], string> = {
@@ -96,11 +103,49 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
     }
   }, []);
 
+  const [gameList, setGameList] = useState<GameManifest[]>([]);
+  const [ratingGame, setRatingGame] = useState('');
+  const [ratings, setRatings] = useState<AdminRatingRow[]>([]);
+  const [ratingQuery, setRatingQuery] = useState('');
+
+  const loadRatings = useCallback(async (gameId: string): Promise<void> => {
+    if (!gameId) return;
+    try {
+      const data = await api.adminRatings(gameId);
+      setRatings(data.rows);
+      setError(null);
+    } catch (err) {
+      setError(messageOf(err));
+    }
+  }, []);
+
   useEffect(() => {
     if (tab === 'overview') void loadOverview();
     if (tab === 'plugins') void loadPlugins();
     if (tab === 'users') void loadUsers();
-  }, [tab, loadOverview, loadPlugins, loadUsers]);
+    if (tab === 'ratings') {
+      void (async () => {
+        if (gameList.length === 0) {
+          const data = await api.games().catch(() => ({ games: [] as GameManifest[] }));
+          setGameList(data.games);
+          const first = data.games[0]?.id ?? '';
+          setRatingGame(first);
+          await loadRatings(first);
+        } else {
+          await loadRatings(ratingGame || gameList[0]!.id);
+        }
+      })();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, loadOverview, loadPlugins, loadUsers, loadRatings]);
+
+  const toggleHide = async (row: AdminRatingRow): Promise<void> => {
+    await run(`hide:${row.userId}`, async () => {
+      await api.adminHideRating(ratingGame, row.userId, !row.hidden);
+      await loadRatings(ratingGame);
+      return row.hidden ? `已恢复 ${row.name} 的排名` : `已把 ${row.name} 从榜单上藏掉`;
+    });
+  };
 
   // 概览页自己转，运维时不时瞟一眼就够了
   useEffect(() => {
@@ -473,6 +518,95 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
           </table>
           <p className="muted small">
             重置密码会让对方所有设备立刻掉线；生成的口令只在这里显示一次，之后无法再查看。
+          </p>
+        </section>
+      ) : null}
+      {tab === 'ratings' ? (
+        <section>
+          <div className="toolbar">
+            <label className="follow-group">
+              <span className="muted small">游戏</span>
+              <select
+                value={ratingGame}
+                onChange={(event) => {
+                  setRatingGame(event.target.value);
+                  void loadRatings(event.target.value);
+                }}
+              >
+                {gameList.map((game) => (
+                  <option key={game.id} value={game.id}>
+                    {game.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <input
+              className="game-search"
+              value={ratingQuery}
+              onChange={(event) => setRatingQuery(event.target.value)}
+              placeholder="按昵称或 #编号 检索"
+              aria-label="检索榜上的人"
+            />
+            <span className="muted small">
+              {ratings.length} 人 ·{' '}
+              {ratings.filter((row) => row.hidden).length} 个已隐藏
+            </span>
+          </div>
+
+          <table className="stats-table admin-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>玩家</th>
+                <th>分数</th>
+                <th>局数</th>
+                <th>状态</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {ratings
+                .filter((row) =>
+                  ratingQuery.trim() === ''
+                    ? true
+                    : row.name.toLowerCase().includes(ratingQuery.trim().toLowerCase()),
+                )
+                .map((row, index) => (
+                  <tr key={row.userId} className={row.hidden ? 'hidden-row' : ''}>
+                    <td>{row.hidden ? '—' : index + 1}</td>
+                    <td>{row.name}</td>
+                    <td>{row.rating}</td>
+                    <td>{row.games}</td>
+                    <td>
+                      {row.hidden ? (
+                        <span className="badge disabled">已隐藏</span>
+                      ) : (
+                        <span className="badge active">可见</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        className="ghost small"
+                        disabled={busy === `hide:${row.userId}`}
+                        onClick={() => void toggleHide(row)}
+                      >
+                        {row.hidden ? '放回榜单' : '从榜上隐藏'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              {ratings.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="muted">
+                    这个游戏还没有人上榜。
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+          <p className="muted small">
+            隐藏是「整行不显示、名次顺延」：别人看到的是连续的 1、2、3，不会看出少了谁。
+            分数本身不动，之后还能放回来。
           </p>
         </section>
       ) : null}

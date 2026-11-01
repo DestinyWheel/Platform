@@ -1,11 +1,22 @@
 import { randomUUID } from 'node:crypto';
-import type { BaseState, ChatMessage, GameManifest, LogEntry, TableMode, TableStatus } from '@platform/sdk';
+import type {
+  AdminRatingRow,
+  BaseState,
+  ChatMessage,
+  GameManifest,
+  LogEntry,
+  TableMode,
+  TableStatus,
+} from '@platform/sdk';
 import { INVITE_CODE_LENGTH, randomCode } from './codes.js';
 import type { Db } from './db/types.js';
 
 export interface UserRecord {
   id: string;
+  /** 原始昵称（可以重复） */
   name: string;
+  /** 4–6 位数字编号，全局唯一：`名字#编号` 才是完整的称呼 */
+  tag: string;
   createdAt: number;
   /** 第一个注册的人自动成为管理员（私人平台够用，M3 再加角色表） */
   isAdmin: boolean;
@@ -19,6 +30,20 @@ export interface UserRecord {
   inviteCodeAt: number | null;
   /** 用谁的邀请码注册的 */
   invitedBy: string | null;
+  /** 上次点开「消息」的时间：新关注、新私聊都按它算未读 */
+  socialSeenAt: number;
+}
+
+/** 展示名：`张三#4821`。拼名字的地方都走它，别各拼各的 */
+export function displayName(user: { name: string; tag?: string | null }): string {
+  return user.tag ? `${user.name}#${user.tag}` : user.name;
+}
+
+/** 4–6 位随机数字编号；不用前导 0，念出来不别扭 */
+export function randomTag(digits: number): string {
+  const min = 10 ** (digits - 1);
+  const max = 10 ** digits;
+  return String(min + Math.floor(Math.random() * (max - min)));
 }
 
 /** 只在登录校验时用；命名上带 secret，避免被顺手塞进接口返回值 */
@@ -101,15 +126,20 @@ export interface TableWrite {
 }
 
 export interface Store {
-  findUserName(name: string): Promise<UserRecord | undefined>;
-  findUserWithSecret(name: string): Promise<UserWithSecret | undefined>;
-  /** 重名返回 null（靠 name 的唯一索引兜底，不靠"先查再插"） */
+  /** 昵称可以重复，所以返回的是一个列表；登录时靠它判断要不要让人选 */
+  findUsersByName(name: string): Promise<UserRecord[]>;
+  /** 带密码材料的登录查询；给了 tag 就精确到人 */
+  findUserWithSecret(name: string, tag?: string): Promise<UserWithSecret | undefined>;
+  findUserSecretById(id: string): Promise<UserWithSecret | undefined>;
   createUser(
     name: string,
     passwordHash: string | null,
     invitedBy?: string | null,
   ): Promise<UserRecord | null>;
   getUser(id: string): Promise<UserRecord | undefined>;
+  getUsersByIds(ids: string[]): Promise<UserRecord[]>;
+  /** 按昵称片段 / #编号 检索人 */
+  searchUsers(query: string, limit: number): Promise<UserRecord[]>;
   countUsers(): Promise<number>;
   /** 按邀请码找人；注册时用它确认"这个码是谁的" */
   findUserByInviteCode(code: string): Promise<UserRecord | undefined>;
@@ -119,12 +149,65 @@ export interface Store {
    */
   setInviteCode(id: string): Promise<UserRecord | null>;
   /** 我用邀请码拉进来的人（新的在前） */
-  listInvited(userId: string, limit?: number): Promise<{ id: string; name: string; createdAt: number }[]>;
+  listInvited(
+    userId: string,
+    limit?: number,
+  ): Promise<{ id: string; name: string; tag: string; createdAt: number }[]>;
   /** 设密码（注册后补设 / 认领 / 管理员重置）并作废所有旧令牌，返回新的 token_version */
   setPassword(id: string, passwordHash: string): Promise<number>;
   /** 退出登录：作废所有旧令牌 */
   bumpTokenVersion(id: string): Promise<number>;
   touchLogin(id: string): Promise<void>;
+  /** 点开「消息」：之前的关注和私聊都算读过了 */
+  markSocialSeen(id: string): Promise<void>;
+
+  /* ------------------------- 关注 / 拉黑 ------------------------- */
+  /** 我的分组；第一次调用会自动建一个「默认分组」 */
+  listFollowGroups(userId: string): Promise<FollowGroupRecord[]>;
+  createFollowGroup(userId: string, name: string): Promise<FollowGroupRecord>;
+  renameFollowGroup(userId: string, groupId: string, name: string): Promise<boolean>;
+  /** 删分组：组里的人回默认分组，关注关系本身不删 */
+  deleteFollowGroup(userId: string, groupId: string): Promise<boolean>;
+
+  listFollowing(userId: string): Promise<FollowRow[]>;
+  listFollowers(userId: string): Promise<FollowRow[]>;
+  follow(followerId: string, followeeId: string, groupId: string | null, special: boolean): Promise<FollowRow>;
+  unfollow(followerId: string, followeeId: string): Promise<void>;
+  updateFollow(
+    followerId: string,
+    followeeId: string,
+    patch: { groupId?: string | null; special?: boolean },
+  ): Promise<FollowRow | undefined>;
+  countFollows(userId: string): Promise<{ following: number; followers: number }>;
+
+  listBlocks(userId: string): Promise<{ id: string; name: string; tag: string; at: number }[]>;
+  block(blockerId: string, blockedId: string): Promise<void>;
+  unblock(blockerId: string, blockedId: string): Promise<void>;
+  /** a 拉黑了 b，或者 b 拉黑了 a */
+  hasBlockBetween(a: string, b: string): Promise<boolean>;
+  /** 双向拉黑：我要不要显示「已拉黑」，对面是不是把我挡了 */
+  blockInfo(
+    me: string,
+    other: string,
+  ): Promise<{ iBlocked: boolean; blockedMe: boolean }>;
+  isFollowing(followerId: string, followeeId: string): Promise<boolean>;
+  /** 单条关注关系；拿这条是为了知道分组和特别关注 */
+  getFollow(followerId: string, followeeId: string): Promise<FollowRow | undefined>;
+
+  /* ------------------------- 私聊 ------------------------- */
+  saveDirectMessage(
+    from: string,
+    to: string,
+    body: string,
+    now: number,
+  ): Promise<DirectMessageRecord>;
+  listDirectMessages(me: string, peer: string, limit: number): Promise<DirectMessageRecord[]>;
+  /** 把对方发给我的消息标记成已读 */
+  markThreadRead(me: string, peer: string): Promise<number>;
+  listDirectThreads(me: string): Promise<DirectThreadRecord[]>;
+  countUnreadMessages(me: string): Promise<number>;
+  countNewFollowers(me: string, since: number): Promise<number>;
+  unreadFrom(me: string, peer: string): Promise<number>;
 
   createTable(record: TableRecord): Promise<void>;
   getTable(id: string): Promise<TableRecord | undefined>;
@@ -199,6 +282,10 @@ export interface Store {
     gameId: string,
     limit: number,
   ): Promise<{ userId: string; name: string; rating: number; games: number }[]>;
+  /** 管理端：含被隐藏的行 */
+  listAdminRatings(gameId: string, limit: number): Promise<AdminRatingRow[]>;
+  /** 从某个游戏的榜上隐藏 / 恢复某人 */
+  setRatingHidden(gameId: string, userId: string, hidden: boolean, by: string): Promise<boolean>;
 
   /* ------------------------- 备份 / 恢复 ------------------------- */
   exportAll(): Promise<Record<string, Record<string, unknown>[]>>;
@@ -215,6 +302,7 @@ export interface Store {
 export interface AdminUserRecord {
   id: string;
   name: string;
+  tag: string;
   isAdmin: boolean;
   createdAt: number;
   lastLoginAt: number | null;
@@ -224,6 +312,38 @@ export interface AdminUserRecord {
   /** 打完的局数 */
   games: number;
   wins: number;
+}
+
+/* ------------------------- 社交记录 ------------------------- */
+
+export interface FollowGroupRecord {
+  id: string;
+  name: string;
+  sort: number;
+}
+
+export interface FollowRow {
+  id: string;
+  name: string;
+  tag: string;
+  groupId: string | null;
+  special: boolean;
+  at: number;
+}
+
+export interface DirectMessageRecord {
+  id: string;
+  from: string;
+  to: string;
+  body: string;
+  at: number;
+  readAt: number | null;
+}
+
+export interface DirectThreadRecord {
+  user: { id: string; name: string; tag: string };
+  last: DirectMessageRecord | null;
+  unread: number;
 }
 
 export interface ActionRow {
@@ -316,11 +436,12 @@ function toRecord(row: TableRow): TableRecord {
 
 /** 常规查询列；密码哈希**不在**这里，只有 findUserWithSecret 才显式取 */
 const USER_COLUMNS =
-  'id, name, created_at, is_admin, token_version, last_login_at, password_set_at, invite_code, invite_code_at, invited_by';
+  'id, name, tag, created_at, is_admin, token_version, last_login_at, password_set_at, invite_code, invite_code_at, invited_by, social_seen_at';
 
 interface UserRow {
   id: string;
   name: string;
+  tag: string;
   created_at: number;
   is_admin: boolean;
   password_hash?: string | null;
@@ -330,12 +451,14 @@ interface UserRow {
   invite_code: string | null;
   invite_code_at: number | null;
   invited_by: string | null;
+  social_seen_at: number | null;
 }
 
 function toUser(row: UserRow): UserRecord {
   return {
     id: row.id,
     name: row.name,
+    tag: row.tag,
     createdAt: Number(row.created_at),
     isAdmin: Boolean(row.is_admin),
     hasPassword: row.password_set_at !== null,
@@ -344,22 +467,36 @@ function toUser(row: UserRow): UserRecord {
     inviteCode: row.invite_code ?? null,
     inviteCodeAt: row.invite_code_at === null ? null : Number(row.invite_code_at),
     invitedBy: row.invited_by ?? null,
+    socialSeenAt: Number(row.social_seen_at ?? 0),
   };
 }
 
 export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
-  async findUserName(name: string): Promise<UserRecord | undefined> {
-    const rows = await this.db.query<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE name = $1`, [name]);
-    const row = rows[0];
-    return row ? toUser(row) : undefined;
+  async findUsersByName(name: string): Promise<UserRecord[]> {
+    const rows = await this.db.query<UserRow>(
+      `SELECT ${USER_COLUMNS} FROM users WHERE name = $1 ORDER BY created_at ASC`,
+      [name],
+    );
+    return rows.map(toUser);
   }
 
-  async findUserWithSecret(name: string): Promise<UserWithSecret | undefined> {
+  async findUserWithSecret(name: string, tag?: string): Promise<UserWithSecret | undefined> {
     const rows = await this.db.query<UserRow>(
-      `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE name = $1`,
-      [name],
+      tag
+        ? `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE name = $1 AND tag = $2 LIMIT 1`
+        : `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE name = $1 LIMIT 1`,
+      tag ? [name, tag] : [name],
+    );
+    const row = rows[0];
+    return row ? { ...toUser(row), passwordHash: row.password_hash ?? null } : undefined;
+  }
+
+  async findUserSecretById(id: string): Promise<UserWithSecret | undefined> {
+    const rows = await this.db.query<UserRow>(
+      `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE id = $1`,
+      [id],
     );
     const row = rows[0];
     return row ? { ...toUser(row), passwordHash: row.password_hash ?? null } : undefined;
@@ -373,20 +510,21 @@ export class PgStore implements Store {
     // 第一个注册的人自动成为管理员。is_admin 在 SQL 里算，省掉"先 count 再插"的竞态
     const now = Date.now();
 
-    // 邀请码在注册时就生成好（"只能生成一次"对普通用户来说就是这一次）。
-    // 8 位 31 进制，撞车概率可以忽略，但撞了要换一个再来——不能把注册搞失败。
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    // 编号和邀请码都可能撞车，撞了就换一个重来——不能把注册搞失败。
+    // 编号先发 4 位，连续撞说明这个号段挤了，再往 5 位、6 位放。
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const digits = attempt < 8 ? 4 : attempt < 10 ? 5 : 6;
       try {
         const rows = await this.db.query<{ id: string }>(
           `INSERT INTO users
-             (id, name, created_at, is_admin, password_hash, password_set_at, last_login_at,
+             (id, name, tag, created_at, is_admin, password_hash, password_set_at, last_login_at,
               invite_code, invite_code_at, invited_by)
-           VALUES ($1, $2, $3, NOT EXISTS (SELECT 1 FROM users), $4, $5, $6, $7, $8, $9)
-           ON CONFLICT (name) DO NOTHING
+           VALUES ($1, $2, $3, $4, NOT EXISTS (SELECT 1 FROM users), $5, $6, $7, $8, $9, $10)
            RETURNING id`,
           [
             randomUUID(),
             name,
+            randomTag(digits),
             now,
             passwordHash,
             passwordHash ? now : null,
@@ -396,15 +534,47 @@ export class PgStore implements Store {
             invitedBy,
           ],
         );
-        if (rows.length === 0) return null;
         return (await this.getUser(rows[0]!.id)) ?? null;
       } catch (error) {
-        // 23505 = 唯一约束冲突。重名已经被 ON CONFLICT 吃掉了，走到这里的只可能是邀请码撞了
+        // 23505 = 唯一约束冲突：编号或邀请码撞了，换一个再来
         if ((error as { code?: string }).code === '23505') continue;
         throw error;
       }
     }
-    throw new Error('生成邀请码失败，请重试');
+    throw new Error('分配编号失败，请重试');
+  }
+
+  /** 检索人：昵称包含、或者编号以这些数字开头。给关注 / 私聊 / 管理端共用 */
+  async searchUsers(query: string, limit: number): Promise<UserRecord[]> {
+    const text = query.trim();
+    if (!text) return [];
+
+    // 「张三#4821」整串丢进来也能查到
+    const [rawName, rawTag] = text.includes('#') ? text.split('#') : [text, ''];
+    const exactTag = (rawTag ?? '').trim();
+
+    const rows = await this.db.query<UserRow>(
+      `SELECT ${USER_COLUMNS} FROM users
+        WHERE position(lower($1) in lower(name)) > 0
+           OR ($2 <> '' AND tag = $2)
+        ORDER BY (lower(name) = lower($1)) DESC, created_at ASC
+        LIMIT $3`,
+      [rawName, exactTag, limit],
+    );
+    return rows.map(toUser);
+  }
+
+  async getUsersByIds(ids: string[]): Promise<UserRecord[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db.query<UserRow>(
+      `SELECT ${USER_COLUMNS} FROM users WHERE id = ANY($1::text[])`,
+      [ids],
+    );
+    return rows.map(toUser);
+  }
+
+  async markSocialSeen(id: string): Promise<void> {
+    await this.db.execute('UPDATE users SET social_seen_at = $2 WHERE id = $1', [id, Date.now()]);
   }
 
   async getUser(id: string): Promise<UserRecord | undefined> {
@@ -458,12 +628,17 @@ export class PgStore implements Store {
   async listInvited(
     userId: string,
     limit = 100,
-  ): Promise<{ id: string; name: string; createdAt: number }[]> {
-    const rows = await this.db.query<{ id: string; name: string; created_at: number }>(
-      'SELECT id, name, created_at FROM users WHERE invited_by = $1 ORDER BY created_at DESC LIMIT $2',
+  ): Promise<{ id: string; name: string; tag: string; createdAt: number }[]> {
+    const rows = await this.db.query<{ id: string; name: string; tag: string; created_at: number }>(
+      'SELECT id, name, tag, created_at FROM users WHERE invited_by = $1 ORDER BY created_at DESC LIMIT $2',
       [userId, limit],
     );
-    return rows.map((row) => ({ id: row.id, name: row.name, createdAt: Number(row.created_at) }));
+    return rows.map((row) => ({
+      id: row.id,
+      name: displayName(row),
+      tag: row.tag,
+      createdAt: Number(row.created_at),
+    }));
   }
 
   async setPassword(id: string, passwordHash: string): Promise<number> {
@@ -932,22 +1107,505 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       user_id: string;
       name: string;
+      tag: string;
       rating: number;
       games: number;
     }>(
-      `SELECT r.user_id, u.name, r.rating, r.games
+      `SELECT r.user_id, u.name, u.tag, r.rating, r.games
          FROM ratings r JOIN users u ON u.id = r.user_id
-        WHERE r.game_id = $1
+        WHERE r.game_id = $1 AND NOT r.hidden
         ORDER BY r.rating DESC, r.games DESC
         LIMIT $2`,
       [gameId, limit],
     );
     return rows.map((row) => ({
       userId: row.user_id,
-      name: row.name,
+      name: displayName(row),
       rating: Number(row.rating),
       games: Number(row.games),
     }));
+  }
+
+  /** 管理端：包含被隐藏的行，用于"谁在这个榜上、谁被藏了" */
+  async listAdminRatings(gameId: string, limit: number): Promise<AdminRatingRow[]> {
+    const rows = await this.db.query<{
+      user_id: string;
+      name: string;
+      tag: string;
+      rating: number;
+      games: number;
+      hidden: boolean;
+    }>(
+      `SELECT r.user_id, u.name, u.tag, r.rating, r.games, r.hidden
+         FROM ratings r JOIN users u ON u.id = r.user_id
+        WHERE r.game_id = $1
+        ORDER BY r.hidden ASC, r.rating DESC, r.games DESC
+        LIMIT $2`,
+      [gameId, limit],
+    );
+    return rows.map((row) => ({
+      userId: row.user_id,
+      name: displayName(row),
+      rating: Number(row.rating),
+      games: Number(row.games),
+      hidden: Boolean(row.hidden),
+    }));
+  }
+
+  async setRatingHidden(
+    gameId: string,
+    userId: string,
+    hidden: boolean,
+    by: string,
+  ): Promise<boolean> {
+    const rows = await this.db.query<{ user_id: string }>(
+      `UPDATE ratings
+          SET hidden = $3::boolean,
+              hidden_by = CASE WHEN $3::boolean THEN $4::text ELSE NULL END,
+              hidden_at = CASE WHEN $3::boolean THEN $4::bigint ELSE NULL END
+        WHERE game_id = $1 AND user_id = $2
+      RETURNING user_id`,
+      [gameId, userId, hidden, hidden ? Date.now() : null],
+    );
+    return rows.length > 0;
+  }
+
+  /* ------------------------- 关注 / 拉黑 ------------------------- */
+
+  async listFollowGroups(userId: string): Promise<FollowGroupRecord[]> {
+    await this.ensureDefaultGroup(userId);
+    const rows = await this.db.query<{ id: string; name: string; sort: number }>(
+      `SELECT id, name, sort FROM follow_groups
+        WHERE user_id = $1 ORDER BY sort ASC, created_at ASC`,
+      [userId],
+    );
+    return rows.map((row) => ({ id: row.id, name: row.name, sort: Number(row.sort) }));
+  }
+
+  /** 没有分组的人第一次用社交功能时自动给一个，省得前端到处判空 */
+  private async ensureDefaultGroup(userId: string): Promise<string> {
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT id FROM follow_groups WHERE user_id = $1 ORDER BY sort ASC, created_at ASC LIMIT 1`,
+      [userId],
+    );
+    if (rows[0]) return rows[0].id;
+
+    const id = randomUUID();
+    await this.db.execute(
+      `INSERT INTO follow_groups (id, user_id, name, sort, created_at) VALUES ($1,$2,$3,$4,$5)`,
+      [id, userId, '默认分组', 0, Date.now()],
+    );
+    return id;
+  }
+
+  async createFollowGroup(userId: string, name: string): Promise<FollowGroupRecord> {
+    const id = randomUUID();
+    const rows = await this.db.query<{ sort: number }>(
+      `SELECT COALESCE(max(sort), 0) + 1 AS sort FROM follow_groups WHERE user_id = $1`,
+      [userId],
+    );
+    const sort = Number(rows[0]?.sort ?? 1);
+    await this.db.execute(
+      `INSERT INTO follow_groups (id, user_id, name, sort, created_at) VALUES ($1,$2,$3,$4,$5)`,
+      [id, userId, name, sort, Date.now()],
+    );
+    return { id, name, sort };
+  }
+
+  async renameFollowGroup(userId: string, groupId: string, name: string): Promise<boolean> {
+    const rows = await this.db.query<{ id: string }>(
+      `UPDATE follow_groups SET name = $3 WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [groupId, userId, name],
+    );
+    return rows.length > 0;
+  }
+
+  async deleteFollowGroup(userId: string, groupId: string): Promise<boolean> {
+    const defaultId = await this.ensureDefaultGroup(userId);
+    // 默认分组不能删：删了之后别人的关注关系无处可放
+    if (groupId === defaultId) return false;
+
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        `UPDATE follows SET group_id = $3 WHERE follower_id = $1 AND group_id = $2`,
+        [userId, groupId, defaultId],
+      );
+      const rows = await tx.query<{ id: string }>(
+        `DELETE FROM follow_groups WHERE id = $1 AND user_id = $2 RETURNING id`,
+        [groupId, userId],
+      );
+      return rows.length > 0;
+    });
+  }
+
+  private async followRows(where: 'f.follower_id' | 'f.followee_id', userId: string): Promise<FollowRow[]> {
+    const rows = await this.db.query<{
+      id: string;
+      name: string;
+      tag: string;
+      group_id: string | null;
+      special: boolean;
+      created_at: number;
+    }>(
+      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+         FROM follows f JOIN users u
+           ON u.id = ${where === 'f.follower_id' ? 'f.followee_id' : 'f.follower_id'}
+        WHERE ${where} = $1
+        ORDER BY f.special DESC, f.created_at DESC`,
+      [userId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      name: displayName(row),
+      tag: row.tag,
+      groupId: row.group_id,
+      special: Boolean(row.special),
+      at: Number(row.created_at),
+    }));
+  }
+
+  async listFollowing(userId: string): Promise<FollowRow[]> {
+    return this.followRows('f.follower_id', userId);
+  }
+
+  async listFollowers(userId: string): Promise<FollowRow[]> {
+    return this.followRows('f.followee_id', userId);
+  }
+
+  async follow(
+    followerId: string,
+    followeeId: string,
+    groupId: string | null,
+    special: boolean,
+  ): Promise<FollowRow> {
+    const group = groupId ?? (await this.ensureDefaultGroup(followerId));
+    await this.db.execute(
+      `INSERT INTO follows (follower_id, followee_id, group_id, special, created_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (follower_id, followee_id) DO UPDATE
+         SET group_id = EXCLUDED.group_id, special = EXCLUDED.special`,
+      [followerId, followeeId, group, special, Date.now()],
+    );
+
+    const rows = await this.db.query<{
+      id: string;
+      name: string;
+      tag: string;
+      group_id: string | null;
+      special: boolean;
+      created_at: number;
+    }>(
+      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+         FROM follows f JOIN users u ON u.id = f.followee_id
+        WHERE f.follower_id = $1 AND f.followee_id = $2`,
+      [followerId, followeeId],
+    );
+    const row = rows[0]!;
+    return {
+      id: row.id,
+      name: displayName(row),
+      tag: row.tag,
+      groupId: row.group_id,
+      special: Boolean(row.special),
+      at: Number(row.created_at),
+    };
+  }
+
+  async unfollow(followerId: string, followeeId: string): Promise<void> {
+    await this.db.execute('DELETE FROM follows WHERE follower_id = $1 AND followee_id = $2', [
+      followerId,
+      followeeId,
+    ]);
+  }
+
+  async updateFollow(
+    followerId: string,
+    followeeId: string,
+    patch: { groupId?: string | null; special?: boolean },
+  ): Promise<FollowRow | undefined> {
+    const sets: string[] = [];
+    const values: unknown[] = [followerId, followeeId];
+    if (patch.groupId !== undefined) {
+      values.push(patch.groupId ?? (await this.ensureDefaultGroup(followerId)));
+      sets.push(`group_id = $${values.length}`);
+    }
+    if (patch.special !== undefined) {
+      values.push(patch.special);
+      sets.push(`special = $${values.length}`);
+    }
+    if (sets.length === 0) return undefined;
+
+    const updated = await this.db.query<{ followee_id: string }>(
+      `UPDATE follows SET ${sets.join(', ')}
+        WHERE follower_id = $1 AND followee_id = $2 RETURNING followee_id`,
+      values,
+    );
+    if (updated.length === 0) return undefined;
+
+    const rows = await this.db.query<{
+      id: string;
+      name: string;
+      tag: string;
+      group_id: string | null;
+      special: boolean;
+      created_at: number;
+    }>(
+      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+         FROM follows f JOIN users u ON u.id = f.followee_id
+        WHERE f.follower_id = $1 AND f.followee_id = $2`,
+      [followerId, followeeId],
+    );
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      name: displayName(row),
+      tag: row.tag,
+      groupId: row.group_id,
+      special: Boolean(row.special),
+      at: Number(row.created_at),
+    };
+  }
+
+  async countFollows(userId: string): Promise<{ following: number; followers: number }> {
+    const rows = await this.db.query<{ following: number; followers: number }>(
+      `SELECT
+         (SELECT count(*)::int FROM follows WHERE follower_id = $1) AS following,
+         (SELECT count(*)::int FROM follows WHERE followee_id = $1) AS followers`,
+      [userId],
+    );
+    return {
+      following: Number(rows[0]?.following ?? 0),
+      followers: Number(rows[0]?.followers ?? 0),
+    };
+  }
+
+  async listBlocks(userId: string): Promise<{ id: string; name: string; tag: string; at: number }[]> {
+    const rows = await this.db.query<{ id: string; name: string; tag: string; created_at: number }>(
+      `SELECT u.id, u.name, u.tag, b.created_at
+         FROM blocks b JOIN users u ON u.id = b.blocked_id
+        WHERE b.blocker_id = $1
+        ORDER BY b.created_at DESC`,
+      [userId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      name: displayName(row),
+      tag: row.tag,
+      at: Number(row.created_at),
+    }));
+  }
+
+  async block(blockerId: string, blockedId: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO blocks (blocker_id, blocked_id, created_at) VALUES ($1,$2,$3)
+       ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+      [blockerId, blockedId, Date.now()],
+    );
+  }
+
+  async unblock(blockerId: string, blockedId: string): Promise<void> {
+    await this.db.execute('DELETE FROM blocks WHERE blocker_id = $1 AND blocked_id = $2', [
+      blockerId,
+      blockedId,
+    ]);
+  }
+
+  async hasBlockBetween(a: string, b: string): Promise<boolean> {
+    const rows = await this.db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM blocks
+        WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)`,
+      [a, b],
+    );
+    return Number(rows[0]?.n ?? 0) > 0;
+  }
+
+  async blockInfo(
+    me: string,
+    other: string,
+  ): Promise<{ iBlocked: boolean; blockedMe: boolean }> {
+    const rows = await this.db.query<{ blocker_id: string }>(
+      `SELECT blocker_id FROM blocks
+        WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)`,
+      [me, other],
+    );
+    return {
+      iBlocked: rows.some((row) => row.blocker_id === me),
+      blockedMe: rows.some((row) => row.blocker_id === other),
+    };
+  }
+
+  async isFollowing(followerId: string, followeeId: string): Promise<boolean> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM follows WHERE follower_id = $1 AND followee_id = $2',
+      [followerId, followeeId],
+    );
+    return Number(rows[0]?.n ?? 0) > 0;
+  }
+
+  async getFollow(followerId: string, followeeId: string): Promise<FollowRow | undefined> {
+    const rows = await this.db.query<{
+      id: string;
+      name: string;
+      tag: string;
+      group_id: string | null;
+      special: boolean;
+      created_at: number;
+    }>(
+      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+         FROM follows f JOIN users u ON u.id = f.followee_id
+        WHERE f.follower_id = $1 AND f.followee_id = $2`,
+      [followerId, followeeId],
+    );
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      name: displayName(row),
+      tag: row.tag,
+      groupId: row.group_id,
+      special: Boolean(row.special),
+      at: Number(row.created_at),
+    };
+  }
+
+  /* ------------------------- 私聊 ------------------------- */
+
+  async saveDirectMessage(
+    from: string,
+    to: string,
+    body: string,
+    now: number,
+  ): Promise<DirectMessageRecord> {
+    const id = randomUUID();
+    await this.db.execute(
+      `INSERT INTO direct_messages (id, sender_id, recipient_id, body, created_at)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [id, from, to, body, now],
+    );
+    return { id, from, to, body, at: now, readAt: null };
+  }
+
+  async listDirectMessages(
+    me: string,
+    peer: string,
+    limit: number,
+  ): Promise<DirectMessageRecord[]> {
+    const rows = await this.db.query<{
+      id: string;
+      sender_id: string;
+      recipient_id: string;
+      body: string;
+      created_at: number;
+      read_at: number | null;
+    }>(
+      `SELECT id, sender_id, recipient_id, body, created_at, read_at
+         FROM direct_messages
+        WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)
+        ORDER BY created_at DESC
+        LIMIT $3`,
+      [me, peer, limit],
+    );
+    return rows.reverse().map((row) => ({
+      id: row.id,
+      from: row.sender_id,
+      to: row.recipient_id,
+      body: row.body,
+      at: Number(row.created_at),
+      readAt: row.read_at === null ? null : Number(row.read_at),
+    }));
+  }
+
+  async markThreadRead(me: string, peer: string): Promise<number> {
+    const rows = await this.db.query<{ id: string }>(
+      `UPDATE direct_messages SET read_at = $3
+        WHERE recipient_id = $1 AND sender_id = $2 AND read_at IS NULL
+      RETURNING id`,
+      [me, peer, Date.now()],
+    );
+    return rows.length;
+  }
+
+  async listDirectThreads(me: string): Promise<DirectThreadRecord[]> {
+    const rows = await this.db.query<{
+      peer: string;
+      name: string;
+      tag: string;
+      id: string | null;
+      sender_id: string | null;
+      recipient_id: string | null;
+      body: string | null;
+      created_at: number | null;
+      read_at: number | null;
+      unread: number;
+    }>(
+      `WITH pairs AS (
+         SELECT CASE WHEN sender_id = $1 THEN recipient_id ELSE sender_id END AS peer,
+                max(created_at) AS last_at
+           FROM direct_messages
+          WHERE sender_id = $1 OR recipient_id = $1
+          GROUP BY peer
+       )
+       SELECT p.peer, u.name, u.tag,
+              m.id, m.sender_id, m.recipient_id, m.body, m.created_at, m.read_at,
+              COALESCE(unread.n, 0)::int AS unread
+         FROM pairs p
+         JOIN users u ON u.id = p.peer
+         LEFT JOIN LATERAL (
+           SELECT id, sender_id, recipient_id, body, created_at, read_at
+             FROM direct_messages
+            WHERE (sender_id = $1 AND recipient_id = p.peer)
+               OR (sender_id = p.peer AND recipient_id = $1)
+            ORDER BY created_at DESC LIMIT 1
+         ) m ON true
+         LEFT JOIN LATERAL (
+           SELECT count(*) AS n FROM direct_messages
+            WHERE sender_id = p.peer AND recipient_id = $1 AND read_at IS NULL
+         ) unread ON true
+        ORDER BY p.last_at DESC
+        LIMIT 100`,
+      [me],
+    );
+
+    return rows.map((row) => ({
+      user: { id: row.peer, name: displayName(row), tag: row.tag },
+      last: row.id
+        ? {
+            id: row.id,
+            from: row.sender_id!,
+            to: row.recipient_id!,
+            body: row.body!,
+            at: Number(row.created_at),
+            readAt: row.read_at === null ? null : Number(row.read_at),
+          }
+        : null,
+      unread: Number(row.unread ?? 0),
+    }));
+  }
+
+  async countUnreadMessages(me: string): Promise<number> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM direct_messages WHERE recipient_id = $1 AND read_at IS NULL',
+      [me],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async unreadFrom(me: string, peer: string): Promise<number> {
+    const rows = await this.db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM direct_messages
+        WHERE recipient_id = $1 AND sender_id = $2 AND read_at IS NULL`,
+      [me, peer],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async countNewFollowers(me: string, since: number): Promise<number> {
+    const rows = await this.db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM follows WHERE followee_id = $1 AND created_at > $2`,
+      [me, since],
+    );
+    return Number(rows[0]?.n ?? 0);
   }
 
   /* ------------------------- 备份 / 恢复 ------------------------- */
@@ -1006,6 +1664,7 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       id: string;
       name: string;
+      tag: string;
       is_admin: boolean;
       created_at: number;
       last_login_at: number | null;
@@ -1014,7 +1673,7 @@ export class PgStore implements Store {
       games: number;
       wins: number;
     }>(
-      `SELECT u.id, u.name, u.is_admin, u.created_at, u.last_login_at, u.password_set_at,
+      `SELECT u.id, u.name, u.tag, u.is_admin, u.created_at, u.last_login_at, u.password_set_at,
               u.token_version,
               count(m.table_id)::int AS games,
               COALESCE(sum(CASE WHEN m.is_win THEN 1 ELSE 0 END), 0)::int AS wins
@@ -1028,7 +1687,8 @@ export class PgStore implements Store {
 
     return rows.map((row) => ({
       id: row.id,
-      name: row.name,
+      name: displayName(row),
+      tag: row.tag,
       isAdmin: Boolean(row.is_admin),
       createdAt: Number(row.created_at),
       lastLoginAt: row.last_login_at === null ? null : Number(row.last_login_at),
@@ -1062,6 +1722,10 @@ const DUMP_TABLES = [
   'match_results',
   'ratings',
   'version_acks',
+  'follow_groups',
+  'follows',
+  'blocks',
+  'direct_messages',
 ] as const;
 
 interface GameVersionRow {

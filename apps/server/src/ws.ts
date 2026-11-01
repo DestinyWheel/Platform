@@ -55,6 +55,11 @@ export async function registerWebSocket(
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
     };
 
+    // 这个人自己的频道：私聊、关注提醒直接推过来（不订阅任何牌桌也能收）
+    const offUser = bus.subscribe(`user:${user.id}`, (payload) => {
+      if (payload) send(payload as ServerMessage);
+    });
+
     const pushSnapshot = async (tableId: string): Promise<void> => {
       try {
         const snapshot = await service.snapshot(tableId, user.id);
@@ -162,6 +167,7 @@ export async function registerWebSocket(
     socket.on('close', () => {
       metrics.add('ws.connections', -1);
       request.log.info({ userId: user.id, connectionId }, 'ws 连接关闭');
+      offUser();
       for (const tableId of subscriptions.keys()) presence.leave(tableId, connectionId);
       for (const off of subscriptions.values()) off();
       subscriptions.clear();

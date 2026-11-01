@@ -88,6 +88,8 @@ export class Limiters {
   readonly chat = new RateLimiter(3, 1);
   /** 游戏动作：按用户，每秒 10 次、允许 20 次突发 */
   readonly action = new RateLimiter(20, 10);
+  /** 社交：私聊 / 关注 / 检索共用，按用户，避免被刷成消息轰炸 */
+  readonly social = new RateLimiter(20, 5);
   /** 插件上传：按用户，很贵，限得很死 */
   readonly upload = new RateLimiter(5, 5 / 60);
 
@@ -98,6 +100,7 @@ export class Limiters {
       this.createTable,
       this.chat,
       this.action,
+      this.social,
       this.upload,
     ]) {
       limiter.sweep();

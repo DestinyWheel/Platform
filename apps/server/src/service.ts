@@ -23,6 +23,7 @@ import { computeDeltas, DEFAULT_RATING } from './elo.js';
 import { alignToWindow, realtimeTurnMs, turnPaceMs } from './schedule.js';
 import type { Presence } from './presence.js';
 import type { ActionLog, RecentMatch, Store, TableRecord, UserRecord } from './store.js';
+import { displayName } from './store.js';
 
 const DEFAULT_TURN_MS = 30_000;
 const MAX_LOG = 200;
@@ -174,7 +175,7 @@ export class TableService {
       gameVersion: active.version,
       hostId: user.id,
       status: 'lobby',
-      players: [{ id: user.id, name: user.name, seat: 0, bot: false }],
+      players: [{ id: user.id, name: displayName(user), seat: 0, bot: false }],
       maxPlayers,
       options: input.options ?? {},
       state: null,
@@ -222,7 +223,7 @@ export class TableService {
 
       table.players.push({
         id: user.id,
-        name: user.name,
+        name: displayName(user),
         seat: table.players.length,
         bot: false,
       });
@@ -729,7 +730,11 @@ export class TableService {
   /* 聊天 / 回放 / 战绩                                                 */
   /* ---------------------------------------------------------------- */
 
-  async chat(tableId: string, user: { id: string; name: string }, text: string): Promise<void> {
+  async chat(
+    tableId: string,
+    user: { id: string; name: string; tag?: string },
+    text: string,
+  ): Promise<void> {
     const body = text.trim();
     if (!body) return;
     if (body.length > 200) throw new ServiceError('chat_too_long', '消息最多 200 个字');
@@ -737,7 +742,7 @@ export class TableService {
     const table = await this.store.getTable(tableId);
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
-    await this.store.appendChat(tableId, user.id, user.name, body, Date.now());
+    await this.store.appendChat(tableId, user.id, displayName(user), body, Date.now());
     this.bus.publish(tableId);
   }
 

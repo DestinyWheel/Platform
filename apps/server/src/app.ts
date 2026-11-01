@@ -19,7 +19,7 @@ import { publishDirectory, publishLocalGames } from './pluginHost/publish.js';
 import { PluginError } from './pluginHost/types.js';
 import { extractPackage } from './pluginHost/upload.js';
 import { ServiceError, TableService } from './service.js';
-import { PgStore, type UserRecord } from './store.js';
+import { PgStore, displayName, type UserRecord, type UserWithSecret } from './store.js';
 import { Presence } from './presence.js';
 import { registerWebSocket } from './ws.js';
 
@@ -93,10 +93,30 @@ const registerSchema = credentialsSchema.extend({
   code: z.string().optional(),
 });
 
+/**
+ * 登录名可以写 `张三`，也可以写 `张三#4821`。
+ *
+ * 只认 4–6 位数字做分隔符：昵称里本来就可能带 #（比如「#1 粉丝」），
+ * 不能见 # 就切。
+ */
+export function splitLoginName(raw: string): { name: string; tag?: string } {
+  const text = raw.trim();
+  const match = /^(.*)#(\d{4,6})$/.exec(text);
+  if (!match) return { name: text };
+  return { name: match[1]!.trim(), tag: match[2]! };
+}
+
 const changePasswordSchema = z.object({
   oldPassword: z.string().min(1, '请输入原密码').max(200),
   newPassword: z.string().min(1, '请输入新密码').max(200),
 });
+
+/** 关注分组名：短一点，侧栏里放得下 */
+const groupNameField = z
+  .string()
+  .trim()
+  .min(1, '分组名不能为空')
+  .max(12, '分组名最多 12 个字');
 
 /**
  * 邀请码是社交机制，不是门禁：注册可以直接注册，填了码就记下"谁邀请的"。
@@ -353,11 +373,40 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     };
   });
 
+  /** 某个游戏的完整榜单（含被隐藏的），管理端用 */
+  app.get<{ Querystring: { gameId?: string } }>('/api/admin/ratings', async (request) => {
+    await requireAdmin(request);
+    const gameId = request.query.gameId;
+    if (!gameId) throw new ServiceError('invalid_input', '需要 gameId 参数');
+    return { gameId, rows: await store.listAdminRatings(gameId, 300) };
+  });
+
+  /** 把某人从这个游戏的榜上藏掉（整行不显示、名次顺延），或者放回来 */
+  app.post('/api/admin/ratings/hide', async (request) => {
+    const admin = await requireAdmin(request);
+    const input = z
+      .object({
+        gameId: z.string().min(1),
+        userId: z.string().min(1),
+        hidden: z.boolean(),
+      })
+      .parse(request.body);
+
+    const ok = await store.setRatingHidden(input.gameId, input.userId, input.hidden, admin.id);
+    if (!ok) throw new ServiceError('not_found', '这个人在这个游戏上还没有分数');
+    request.log.info({ admin: admin.id, ...input }, '排行榜隐藏');
+    return { ok: true };
+  });
+
   /* ------------------------------ 账号 ------------------------------ */
 
-  const publicUser = (user: UserRecord): { id: string; name: string; isAdmin: boolean } => ({
+  const publicUser = (
+    user: UserRecord,
+  ): { id: string; name: string; tag: string; isAdmin: boolean } => ({
     id: user.id,
-    name: user.name,
+    // 展示名带编号。界面上到处都在用 name，这里拼一次就不用在每个页面记得拼
+    name: displayName(user),
+    tag: user.tag,
     isAdmin: user.isAdmin,
   });
 
@@ -365,10 +414,35 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     user: UserRecord,
     remember: boolean,
     tokenVersion = user.tokenVersion,
-  ): { token: string; user: { id: string; name: string; isAdmin: boolean } } => ({
+  ): { token: string; user: { id: string; name: string; tag: string; isAdmin: boolean } } => ({
     token: signToken(user, { remember, tokenVersion }),
     user: publicUser(user),
   });
+
+  /**
+   * 登录 / 认领时找人。
+   *
+   * 昵称可以重复：带了 #编号 就精确找；没带、而同名的有好几个，
+   * 直接 409 把候选人列出来，前端提示"请带上 #编号"。
+   */
+  const resolveAccount = async (
+    name: string,
+    tag?: string,
+  ): Promise<UserWithSecret | undefined> => {
+    if (tag) return store.findUserWithSecret(name, tag);
+
+    const candidates = await store.findUsersByName(name);
+    if (candidates.length > 1) {
+      throw new AuthError('name_ambiguous', '这个昵称有好几个人，请带上 #编号 登录', 409, {
+        candidates: candidates.map((candidate) => ({
+          id: candidate.id,
+          name: displayName(candidate),
+          tag: candidate.tag,
+        })),
+      });
+    }
+    return candidates[0] ? store.findUserWithSecret(name) : undefined;
+  };
 
   /** 登录页要知道"能不能自助认领密码"，这一步必须在未登录时就能问 */
   app.get('/api/auth/config', async () => ({
@@ -396,7 +470,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
 
     const hash = await hashPassword(input.password);
     const user = await store.createUser(input.name, hash, inviter?.id ?? null);
-    if (!user) throw new AuthError('name_taken', '这个昵称已经被占用了', 409);
+    if (!user) throw new AuthError('register_failed', '注册失败，稍后再试', 409);
 
     request.log.info(
       { userId: user.id, name: user.name, isAdmin: user.isAdmin, invitedBy: inviter?.name ?? null },
@@ -409,11 +483,12 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   app.post('/api/auth/login', async (request) => {
     checkLimit(limits.login.take(request.ip));
     const input = credentialsSchema.parse(request.body);
+    const wanted = splitLoginName(input.name);
 
     // 按账号名限流：IP 限流挡不住换 IP 撞同一个账号
-    const failureKey = input.name.toLowerCase();
+    const failureKey = (wanted.tag ? `${wanted.name}#${wanted.tag}` : wanted.name).toLowerCase();
 
-    const record = await store.findUserWithSecret(input.name);
+    const record = await resolveAccount(wanted.name, wanted.tag);
     if (!record) throw new AuthError('invalid_credentials', '昵称或密码不对', 401);
 
     // 老账号（旧版昵称登录留下的）还没密码，引导前端走"认领"。
@@ -447,7 +522,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
     const input = credentialsSchema.parse(request.body);
 
-    const record = await store.findUserWithSecret(input.name);
+    const record = await resolveAccount(splitLoginName(input.name).name, splitLoginName(input.name).tag);
     if (!record || record.hasPassword) {
       throw new AuthError('claim_unavailable', '这个昵称没有待认领的账号', 409);
     }
@@ -467,7 +542,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const input = changePasswordSchema.parse(request.body);
 
     checkLimit(limits.loginFailure.take(`pw:${user.id}`));
-    const record = await store.findUserWithSecret(user.name);
+    const record = await store.findUserSecretById(user.id);
     if (!record || !(await verifyPassword(input.oldPassword, record.passwordHash))) {
       throw new AuthError('invalid_credentials', '原密码不对', 401);
     }
@@ -524,6 +599,220 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
     request.log.info({ userId: user.id }, '生成邀请码');
     return { code: updated.inviteCode };
+  });
+
+  /* ------------------------------ 用户 / 社交 ------------------------------ */
+
+  /** 首页铃铛上的两个数：未读私聊 + 上次看过之后的新关注 */
+  const pulseFor = async (user: UserRecord) => {
+    const [unreadDms, newFollowers] = await Promise.all([
+      store.countUnreadMessages(user.id),
+      store.countNewFollowers(user.id, user.socialSeenAt),
+    ]);
+    return { unreadDms, newFollowers, total: unreadDms + newFollowers };
+  };
+
+  /** 检索人：昵称片段或 #编号。关注、私聊、管理端共用 */
+  app.get<{ Querystring: { q?: string } }>('/api/users/search', async (request) => {
+    const me = await requireUser(request);
+    checkLimit(limits.social.take(`search:${me.id}`));
+
+    const query = (request.query.q ?? '').trim();
+    if (!query) return { users: [] };
+
+    const users = await store.searchUsers(query, 20);
+    return {
+      users: users
+        .filter((user) => user.id !== me.id)
+        .map((user) => ({ id: user.id, name: displayName(user), tag: user.tag })),
+    };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/users/:id', async (request) => {
+    const me = await requireUser(request);
+    const user = await store.getUser(request.params.id);
+    if (!user) throw new ServiceError('not_found', '这个用户不存在');
+
+    const [stats, counts, follow, followedBy, block] = await Promise.all([
+      store.getUserStats(user.id),
+      store.countFollows(user.id),
+      store.getFollow(me.id, user.id),
+      store.isFollowing(user.id, me.id),
+      store.blockInfo(me.id, user.id),
+    ]);
+
+    return {
+      profile: {
+        id: user.id,
+        name: displayName(user),
+        tag: user.tag,
+        createdAt: user.createdAt,
+        stats: stats.map((row) => ({
+          ...row,
+          gameName: host.activeFor(row.gameId)?.manifest.name ?? row.gameId,
+        })),
+        following: follow !== undefined,
+        followedBy,
+        groupId: follow?.groupId ?? null,
+        special: follow?.special ?? false,
+        blocked: block.iBlocked,
+        blocksMe: block.blockedMe,
+        followerCount: counts.followers,
+        followingCount: counts.following,
+      },
+    };
+  });
+
+  app.get('/api/social/pulse', async (request) => {
+    const me = await requireUser(request);
+    return { pulse: await pulseFor(me) };
+  });
+
+  /** 打开消息页：之前的关注和私聊都算读过了 */
+  app.post('/api/social/seen', async (request) => {
+    const me = await requireUser(request);
+    await store.markSocialSeen(me.id);
+    return { pulse: await pulseFor(me) };
+  });
+
+  app.get('/api/social/overview', async (request) => {
+    const me = await requireUser(request);
+    const [groups, following, followers, blocked] = await Promise.all([
+      store.listFollowGroups(me.id),
+      store.listFollowing(me.id),
+      store.listFollowers(me.id),
+      store.listBlocks(me.id),
+    ]);
+    return {
+      groups,
+      following,
+      followers: followers.map((row) => ({ id: row.id, name: row.name, tag: row.tag, at: row.at })),
+      blocked,
+    };
+  });
+
+  app.post('/api/social/follow', async (request) => {
+    const me = await requireUser(request);
+    checkLimit(limits.social.take(`follow:${me.id}`));
+    const input = z
+      .object({
+        userId: z.string().min(1),
+        groupId: z.string().min(1).nullable().optional(),
+        special: z.boolean().optional(),
+      })
+      .parse(request.body);
+
+    if (input.userId === me.id) throw new ServiceError('invalid_input', '不能关注自己');
+    const target = await store.getUser(input.userId);
+    if (!target) throw new ServiceError('not_found', '这个用户不存在');
+
+    const row = await store.follow(me.id, target.id, input.groupId ?? null, input.special ?? false);
+
+    // 对方那边要能看到提醒（不打断：只推一个数字）
+    bus.publish(`user:${target.id}`, { t: 'social', pulse: await pulseFor(target) });
+    return { following: row };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/social/follow/:id', async (request) => {
+    const me = await requireUser(request);
+    await store.unfollow(me.id, request.params.id);
+    return { ok: true };
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/social/follow/:id', async (request) => {
+    const me = await requireUser(request);
+    const input = z
+      .object({
+        groupId: z.string().min(1).nullable().optional(),
+        special: z.boolean().optional(),
+      })
+      .parse(request.body);
+
+    const row = await store.updateFollow(me.id, request.params.id, input);
+    if (!row) throw new ServiceError('not_found', '还没有关注这个人');
+    return { following: row };
+  });
+
+  app.post('/api/social/groups', async (request) => {
+    const me = await requireUser(request);
+    checkLimit(limits.social.take(`group:${me.id}`));
+    const input = z.object({ name: groupNameField }).parse(request.body);
+    const group = await store.createFollowGroup(me.id, input.name);
+    return { group };
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/social/groups/:id', async (request) => {
+    const me = await requireUser(request);
+    const input = z.object({ name: groupNameField }).parse(request.body);
+    const ok = await store.renameFollowGroup(me.id, request.params.id, input.name);
+    if (!ok) throw new ServiceError('not_found', '没有这个分组');
+    return { ok: true };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/social/groups/:id', async (request) => {
+    const me = await requireUser(request);
+    const ok = await store.deleteFollowGroup(me.id, request.params.id);
+    if (!ok) throw new ServiceError('invalid_input', '默认分组不能删');
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/social/block/:id', async (request) => {
+    const me = await requireUser(request);
+    if (request.params.id === me.id) throw new ServiceError('invalid_input', '不能拉黑自己');
+    await store.block(me.id, request.params.id);
+    return { ok: true };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/social/block/:id', async (request) => {
+    const me = await requireUser(request);
+    await store.unblock(me.id, request.params.id);
+    return { ok: true };
+  });
+
+  /* ------------------------------ 私聊 ------------------------------ */
+
+  app.get('/api/dm', async (request) => {
+    const me = await requireUser(request);
+    return { threads: await store.listDirectThreads(me.id), pulse: await pulseFor(me) };
+  });
+
+  app.get<{ Params: { id: string } }>('/api/dm/:id', async (request) => {
+    const me = await requireUser(request);
+    const peer = await store.getUser(request.params.id);
+    if (!peer) throw new ServiceError('not_found', '这个用户不存在');
+
+    const messages = await store.listDirectMessages(me.id, peer.id, 200);
+    await store.markThreadRead(me.id, peer.id);
+    // 别的标签页上的未读数也要跟着减
+    bus.publish(`user:${me.id}`, { t: 'social', pulse: await pulseFor(me) });
+
+    return {
+      user: { id: peer.id, name: displayName(peer), tag: peer.tag },
+      messages,
+    };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/dm/:id', async (request) => {
+    const me = await requireUser(request);
+    checkLimit(limits.social.take(`dm:${me.id}`));
+
+    const peer = await store.getUser(request.params.id);
+    if (!peer) throw new ServiceError('not_found', '这个用户不存在');
+    if (peer.id === me.id) throw new ServiceError('invalid_input', '不能给自己发私聊');
+
+    const input = z
+      .object({ body: z.string().trim().min(1, '说点什么吧').max(500, '一条最多 500 字') })
+      .parse(request.body);
+
+    if (await store.hasBlockBetween(me.id, peer.id)) {
+      throw new ServiceError('blocked', '你们之间有拉黑关系，发不了私聊');
+    }
+
+    const message = await store.saveDirectMessage(me.id, peer.id, input.body, Date.now());
+    bus.publish(`user:${peer.id}`, { t: 'dm', message });
+    bus.publish(`user:${peer.id}`, { t: 'social', pulse: await pulseFor(peer) });
+
+    return { message };
   });
 
   /** 版本公告已读：一个人对（游戏, 版本）只会读一次 */
@@ -836,7 +1125,9 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         .send({ code: 'rate_limited', message: `操作太频繁，${seconds} 秒后再试` });
     }
     if (error instanceof AuthError) {
-      return reply.code(error.status).send({ code: error.code, message: error.message });
+      return reply
+        .code(error.status)
+        .send({ code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
     }
     if (error instanceof ServiceError) {
       const status =

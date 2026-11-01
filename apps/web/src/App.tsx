@@ -4,10 +4,12 @@ import { Lobby } from './views/Lobby';
 import { Admin } from './views/Admin';
 import { GameDetail } from './views/GameDetail';
 import { Login } from './views/Login';
+import { Messages } from './views/Messages';
 import { PluginDocs } from './views/PluginDocs';
 import { ReplayView } from './views/ReplayView';
 import { TableView } from './views/TableView';
 import { UserCenter } from './views/UserCenter';
+import { UserProfile } from './views/UserProfile';
 
 type View =
   | { name: 'lobby' }
@@ -16,7 +18,10 @@ type View =
   | { name: 'game'; id: string }
   | { name: 'user' }
   | { name: 'docs' }
-  | { name: 'admin' };
+  | { name: 'admin' }
+  /** 私聊：可选带上"直接跟谁聊" */
+  | { name: 'messages'; peer?: string }
+  | { name: 'profile'; id: string };
 
 function readHash(): View {
   const table = /^#\/table\/([\w-]+)$/.exec(location.hash);
@@ -27,6 +32,12 @@ function readHash(): View {
 
   const game = /^#\/game\/([\w-]+)$/.exec(location.hash);
   if (game?.[1]) return { name: 'game', id: game[1] };
+
+  const profile = /^#\/u\/([\w-]+)$/.exec(location.hash);
+  if (profile?.[1]) return { name: 'profile', id: profile[1] };
+
+  const messages = /^#\/messages(?:\/([\w-]+))?$/.exec(location.hash);
+  if (messages) return { name: 'messages', peer: messages[1] };
 
   if (location.hash === '#/admin') return { name: 'admin' };
   if (location.hash === '#/me') return { name: 'user' };
@@ -43,13 +54,19 @@ function writeHash(view: View): void {
         ? `#/replay/${view.id}`
         : view.name === 'game'
           ? `#/game/${view.id}`
-          : view.name === 'admin'
-            ? '#/admin'
-            : view.name === 'user'
-              ? '#/me'
-              : view.name === 'docs'
-                ? '#/docs'
-                : '#/';
+          : view.name === 'profile'
+            ? `#/u/${view.id}`
+            : view.name === 'messages'
+              ? view.peer
+                ? `#/messages/${view.peer}`
+                : '#/messages'
+              : view.name === 'admin'
+                ? '#/admin'
+                : view.name === 'user'
+                  ? '#/me'
+                  : view.name === 'docs'
+                    ? '#/docs'
+                    : '#/';
   if (location.hash !== next) history.replaceState(null, '', next);
 }
 
@@ -154,6 +171,7 @@ export function App() {
         onExit={() => navigate({ name: 'lobby' })}
         onOpen={(id) => navigate({ name: 'table', id })}
         onReplay={(id) => navigate({ name: 'replay', id })}
+        onProfile={(id) => navigate({ name: 'profile', id })}
       />
     );
   }
@@ -181,6 +199,30 @@ export function App() {
           setSession(next);
         }}
         onExit={() => navigate({ name: 'lobby' })}
+        onOpenProfile={(id) => navigate({ name: 'profile', id })}
+        onMessage={(id) => navigate({ name: 'messages', peer: id })}
+      />
+    );
+  }
+
+  if (view.name === 'profile') {
+    return (
+      <UserProfile
+        userId={view.id}
+        session={session}
+        onBack={() => navigate({ name: 'lobby' })}
+        onMessage={(id) => navigate({ name: 'messages', peer: id })}
+      />
+    );
+  }
+
+  if (view.name === 'messages') {
+    return (
+      <Messages
+        session={session}
+        initialPeer={view.peer}
+        onBack={() => navigate({ name: 'lobby' })}
+        onOpenProfile={(id) => navigate({ name: 'profile', id })}
       />
     );
   }
@@ -203,6 +245,7 @@ export function App() {
       onUser={() => navigate({ name: 'user' })}
       onGame={(id) => navigate({ name: 'game', id })}
       onDocs={() => navigate({ name: 'docs' })}
+      onMessages={() => navigate({ name: 'messages' })}
       onLogout={() => {
         // 先让服务端把令牌作废（token_version +1），再清本地；
         // 失败也没关系——本地已经清掉了，服务端那份留到过期也进不来这个设备

@@ -32,6 +32,8 @@ export function Login({
   const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 昵称可重复：只写昵称撞上重名时，把候选账号列出来让人点 */
+  const [candidates, setCandidates] = useState<{ id: string; name: string; tag: string }[]>([]);
 
   const trimmed = name.trim();
   const needPassword = mode === 'login' ? 1 : 8;
@@ -44,6 +46,7 @@ export function Login({
   const switchMode = (next: Mode): void => {
     setMode(next);
     setError(null);
+    setCandidates([]);
     setPassword('');
     setConfirm('');
   };
@@ -74,6 +77,15 @@ export function Login({
       if (err instanceof ApiError && err.code === 'password_not_set') {
         setMode('claim');
         setError(null);
+        return;
+      }
+      // 重名：把候选人摆出来，点一下自动带上 #编号
+      if (err instanceof ApiError && err.code === 'name_ambiguous') {
+        const list =
+          (err.details as { candidates?: { id: string; name: string; tag: string }[] } | undefined)
+            ?.candidates ?? [];
+        setCandidates(list);
+        setError('这个昵称有好几个人，点一个（会自动带上 #编号）');
         return;
       }
       setError((err as Error).message);
@@ -166,6 +178,24 @@ export function Login({
           <div className="error">两次输入的密码不一样</div>
         ) : null}
         {error ? <div className="error">{error}</div> : null}
+        {candidates.length > 0 ? (
+          <div className="chip-row">
+            {candidates.map((candidate) => (
+              <button
+                key={candidate.id}
+                type="button"
+                className="chip"
+                onClick={() => {
+                  setName(candidate.name);
+                  setCandidates([]);
+                  setError(null);
+                }}
+              >
+                {candidate.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         <button type="submit" className="primary" disabled={!ready}>
           {busy ? '处理中…' : TITLE[mode]}

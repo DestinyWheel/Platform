@@ -3,11 +3,12 @@ import { api, type Session } from '../api';
 import { copyText, selectText } from '../clipboard';
 import { formatTime } from '../format';
 import { ChangePassword } from './ChangePassword';
+import { SocialPanel } from './SocialPanel';
 
 interface InviteInfo {
   code: string | null;
   createdAt: number | null;
-  invited: { id: string; name: string; createdAt: number }[];
+  invited: { id: string; name: string; tag: string; createdAt: number }[];
 }
 
 /**
@@ -20,10 +21,14 @@ export function UserCenter({
   session,
   onSession,
   onExit,
+  onOpenProfile,
+  onMessage,
 }: {
   session: Session;
   onSession: (next: Session) => void;
   onExit: () => void;
+  onOpenProfile: (userId: string) => void;
+  onMessage: (userId: string) => void;
 }) {
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [busy, setBusy] = useState(false);
@@ -95,6 +100,11 @@ export function UserCenter({
         <dl className="facts">
           <dt>昵称</dt>
           <dd>{session.user.name}</dd>
+          <dt>编号</dt>
+          <dd>
+            #{session.user.tag}
+            <span className="muted small">　别人登录、找你的时候要带上它</span>
+          </dd>
           <dt>身份</dt>
           <dd>{session.user.isAdmin ? '管理员' : '成员'}</dd>
         </dl>
@@ -102,6 +112,8 @@ export function UserCenter({
           改密码
         </button>
       </section>
+
+      <SocialPanel onOpenProfile={onOpenProfile} onMessage={onMessage} />
 
       <section>
         <h2>我的邀请码</h2>

@@ -483,9 +483,16 @@ CREATE TABLE match_actions (
 -- 其余：users / table_players / elo / replay_views
 ```
 
-**账号**：昵称即登录名，密码用 scrypt（`scrypt$N$r$p$salt$hash`）存；JWT 里带
-`ver`，和 `users.token_version` 对不上就作废——改密码、退出登录都靠它立即生效。
-详见 [auth.md](./auth.md)。
+**账号**：昵称**可以重复**，身份靠 `users.tag`（4–6 位数字，全局唯一），展示名统一
+拼成 `名字#编号`。登录写 `名字` 或 `名字#编号` 都行；只写名字而重名时回 409 +
+候选人。密码用 scrypt（`scrypt$N$r$p$salt$hash`）存；JWT 里带 `ver`，和
+`users.token_version` 对不上就作废——改密码、退出登录都靠它立即生效。
+详见 [auth.md](./auth.md) 和 [social.md](./social.md)。
+
+**社交**：`follow_groups`（每人一份，删组不删关注）、`follows`（单向，带分组和
+`special`）、`blocks`（单向拉黑、双向生效）、`direct_messages`（`read_at` 标已读）。
+`ratings` 上另有 `hidden / hidden_by / hidden_at`，管理端可以把某人从某个游戏的榜上
+整行藏掉（名次顺延）。
 
 **房间码**：`tables.code` 是 6 位、去掉 0/O/1/I 的码，念得清、抄得对。首页不再有
 "房间列表"，只有「随便来一局 / 输房间号 / 我的对局」。

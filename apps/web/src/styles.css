@@ -1443,3 +1443,333 @@ button.danger-text {
   border-radius: 8px;
   background: var(--panel);
 }
+
+/* ---------------- 消息 / 私聊 ---------------- */
+
+.bell {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bell-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.dm-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 16px;
+  min-height: 480px;
+}
+
+.dm-list {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dm-search input {
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.dm-results {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-bottom: 1px dashed var(--border);
+}
+
+.dm-results .link {
+  font-size: 14px;
+  text-align: left;
+}
+
+.dm-threads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+}
+
+.dm-thread {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+}
+
+.dm-thread:hover {
+  background: var(--panel-2);
+}
+
+.dm-thread.active {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.dm-thread-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dm-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dm-unread {
+  margin-left: auto;
+  background: var(--danger);
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.dm-preview {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dm-empty {
+  padding: 10px 4px;
+}
+
+.dm-thread-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-height: 480px;
+}
+
+.dm-thread-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dm-thread-title .link {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.dm-messages {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+}
+
+.dm-bubble {
+  max-width: 70%;
+  align-self: flex-start;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+.dm-bubble.mine {
+  align-self: flex-end;
+  background: rgba(76, 141, 255, 0.16);
+  border-color: rgba(76, 141, 255, 0.4);
+}
+
+.dm-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dm-time {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.dm-composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.dm-composer input {
+  flex: 1;
+  min-width: 0;
+}
+
+.dm-composer button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.dm-placeholder {
+  padding: 24px;
+}
+
+/* ---------------- 用户主页 ---------------- */
+
+.profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+
+.profile-name {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.profile-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------------- 关注 / 分组 ---------------- */
+
+.group-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.group-chip .link {
+  font-size: 12px;
+}
+
+.group-new {
+  display: flex;
+  gap: 8px;
+  max-width: 420px;
+}
+
+.group-new input {
+  padding: 8px 10px;
+}
+
+.group-new button {
+  white-space: nowrap;
+}
+
+/* 左对齐的工具行：搜索框、下拉、说明文字排一排 */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.people-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.person-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.person-name {
+  font-size: 14px;
+}
+
+.person-row select,
+.follow-group select {
+  width: auto;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.follow-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hidden-row td {
+  opacity: 0.55;
+}
+
+/* ---------------- 大厅搜索 ---------------- */
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.game-search {
+  max-width: 320px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.seat-name.link {
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}

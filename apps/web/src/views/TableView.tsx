@@ -54,12 +54,15 @@ export function TableView({
   onExit,
   onOpen,
   onReplay,
+  onProfile,
 }: {
   tableId: string;
   session: Session;
   onExit: () => void;
   onOpen: (tableId: string) => void;
   onReplay: (tableId: string) => void;
+  /** 点座位上的名字看主页（关注 / 私聊） */
+  onProfile?: (userId: string) => void;
 }) {
   const { snapshot, error, sendAction, sendChat } = useTableSocket(tableId, session.token);
   const { client, error: clientError } = useGameClient(
@@ -241,7 +244,17 @@ export function TableView({
               if (player.id === session.user.id) classes.push('me');
               return (
                 <div key={player.id} className={classes.join(' ')}>
-                  <span className="seat-name">{player.name}</span>
+                  {player.bot || !onProfile ? (
+                    <span className="seat-name">{player.name}</span>
+                  ) : (
+                    <button
+                      className="link seat-name"
+                      title="看他的主页 / 关注 / 私聊"
+                      onClick={() => onProfile(player.id)}
+                    >
+                      {player.name}
+                    </button>
+                  )}
                   {player.bot ? <span className="tag">🤖</span> : null}
                   {player.id === snapshot.hostId ? <span className="tag">房主</span> : null}
                   {player.forfeited ? <span className="tag">认负</span> : null}
