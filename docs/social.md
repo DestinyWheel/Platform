@@ -1,86 +1,137 @@
-# 身份与社交：昵称重复、#编号、关注、私聊
+# 身份与社交：账户、昵称、关注、私聊、提醒、成就
 
-这一层解决三件事：**怎么认出一个人**、**怎么把人分堆**、**怎么私下说话**。
+这一层解决五件事：**怎么认人**（账户 / 昵称）、**怎么把人分堆**（关注 / 分组）、
+**怎么私下说话**（私聊）、**怎么提醒**（@提及 / 订阅 / 邀请 / 成就）、
+**怎么留下痕迹**（成就徽章）。
 
-## 一、昵称可以重复，靠 #编号 区分
-
-早先昵称就是唯一键，重名注册直接 409。现在改成：
+## 一、账户 + 昵称
 
 | 东西 | 位置 | 说明 |
 | --- | --- | --- |
-| 昵称 | `users.name` | 可以重复，**不再是身份** |
-| 编号 | `users.tag` | 4–6 位数字，全局唯一（`ux_users_tag`） |
-| 展示名 | 拼出来的 | `张三#4821`，服务端统一拼好再下发 |
+| 账户名 | `users.account` | 全局唯一，**登录用它**，注册后不可改 |
+| 昵称 | `users.name` | 界面上显示的名字，可以重复、随时可改 |
+| 头像 | `users.avatar` | `preset:<id>` / `upload:<文件>` / null（按 id 稳定挑一个） |
+| 签名 | `users.signature` | 一句话，60 字以内 |
 
-几个要命的细节：
+- **登录只认账户名**。昵称不能用来登录——重名的人太多了，昵称不是身份。
+- 老数据迁移：把原来的 `名字#编号` 去掉 `#编号` 当作账户名，`#编号` 这一列整个删掉。
+  极少数同名账户会被自动加上数字后缀（`zhangsan2`），保证唯一索引建得起来。
+- 展示的地方（大厅、牌桌座位、聊天、榜单、管理端、回放）一律用**昵称**。
+- 需要认人的地方（@提及、检索、登录）用**账户名**，界面上以 `@account` 的形式标出来。
 
-1. **登录**：`张三` 或 `张三#4821` 都行。只写昵称而同名有多个 → `409 name_ambiguous`，
-   响应里带 `details.candidates`，前端把候选人列出来点一下（自动补上编号）。
-2. **解析规则**：只有「`#` + 4–6 位数字」才当分隔符。昵称里本来就可能带 `#`
-   （比如「#1 粉丝」），见 `#` 就切会把人切坏。
-3. **老账号**：迁移里按注册顺序发 1000、1001…… 确定性、不重复；新用户才是随机数，
-   撞了就换（4 位连续撞就上 5 位、6 位）。
-4. **展示**：`publicUser()` / 榜单 / 聊天 / 牌桌座位 / 管理端全部下发展示名，
-   插件里拿到的 `player.name` 也已经是 `名字#编号`——插件不用改。
+## 二、头像与签名
 
-## 二、关注：分组 + 特别关注
+- 头像先只做**预设**：10 个 emoji + 深色底，`packages/sdk/src/avatar.ts` 前后端共用。
+- 没设置过的人按 `id` 稳定地挑一个——同一个人每次刷新都是同一张，不会闪。
+- 上传头像的代码已经写好了（`POST /api/me/avatar`，PNG/JPEG/WebP、512KB 上限、
+  校验文件头、存 `storage/avatars/`、按 URL 长缓存），但**默认关着**：
+  `AVATAR_UPLOAD=1` 才开放。现在前端只给预设选择器。
 
-- `follow_groups`：每个人一份分组，第一次用社交功能时自动建「默认分组」。
-  删分组**不会删关注**，组里的人回到默认分组；默认分组本身不能删。
-- `follows`：`(follower_id, followee_id)` 主键，单向关注。字段里带 `group_id`
-  和 `special`。
-- 特别关注只影响两件事：列表排序（置顶）和提醒（不做折叠），不改变关系。
+## 三、关注、分组、特别关注
 
-列表按 `special DESC, created_at DESC` 排，所以特别关注的人永远在最上面。
+- `follow_groups`：每人一份，第一次用社交功能时自动建「默认分组」。
+  删分组不删关注，人回默认组；默认组不能删。
+- `follows`：`(follower_id, followee_id)` 主键，单向。带 `group_id` 和 `special`。
+- 特别关注只影响排序（置顶）和提醒（不折叠）。
 
-## 三、私聊 + 拉黑
+## 四、私聊与拉黑
 
-- `direct_messages`：一行一条消息，`read_at` 标记已读。会话不单独建表，
-  由 `LIST` + `LATERAL` 按对方聚合出「最后一条 + 未读数」，人少的时候这样最省事。
-- 打开会话时把对方发来的消息全部标成已读（`markThreadRead`）。
-- `blocks`：单向拉黑，但**双向生效**——任一方拉黑，双方都发不了私聊
-  （`hasBlockBetween`）。拉黑不删关注，也不影响看公开战绩。
-- 首页铃铛 = 未读私聊 + 上次点开「消息」之后的新粉丝（`users.social_seen_at`）。
+- `direct_messages`：一行一条，`read_at` 标已读；会话按对方聚合（LATERAL 取最后一条 + 未读数）。
+- `blocks`：单向拉黑、双向生效——任一方拉黑，双方都发不了私聊。
+- 邀请某人来打牌也走私聊：发一条带房间号的私聊 + 一条提醒。
 
-## 四、管理员隐藏排行榜玩家
+## 五、提醒中心
 
-`ratings` 上加了 `hidden / hidden_by / hidden_at`。
+`notifications(user_id, kind, title, body, link, created_at, read_at)`
 
-- 隐藏是**整行不显示、名次顺延**：别人看到的是连续的 1、2、3，看不出少了谁。
-- 分数本身不动，随时能放回去；管理端的榜单接口会带上被隐藏的行和标记。
-- 只影响排行榜展示，不影响战绩、回放、Elo 计算。
+| kind | 什么时候产生 | link |
+| --- | --- | --- |
+| `mention` | 牌桌聊天里 `@账户名` | `#/table/<id>` |
+| `follow` | 有人关注你 | `#/u/<id>` |
+| `subscribe` | 你订阅的游戏有人开桌 / 你订阅的人开桌 | `#/join/<房间号>` |
+| `achievement` | 解锁成就 | `#/game/<id>` |
+| `system` | 邀请你打牌 | `#/join/<房间号>` |
 
-## 五、接口一览
+- 大厅铃铛上的数字 = 未读私聊 + 未读提醒。
+- 「消息」页分两个页签：私聊 / 提醒；打开提醒页签就把未读清零。
+- 通知会通过 WebSocket 的 `user:<id>` 频道即时推给所有连接（`{ t: 'notice' }`），
+  推不到也没关系——下次打开页面列表还在。
+
+## 六、订阅
+
+`subscriptions(user_id, kind, target)`，`kind` 是 `game` 或 `user`：
+
+- 订阅游戏 → 这个游戏有人开桌时提醒你（`#/game/:id` 上的「订阅开桌提醒」）
+- 订阅人 → 这个人开桌时提醒你
+
+订阅是"轻量的关注牌桌"，和关注不是一回事：关注管的是人和分组，订阅管的是**开桌这件事**。
+
+## 七、@提及
+
+牌桌聊天里写 `@账户名`：
+
+- 只提醒**同一桌**的真人（不在桌上的人被 @ 到也一脸问号）
+- 服务端解析、落 `notifications`、推 WS、铃铛加一
+- 前端把 `@xxx` 高亮成一个小标签
+
+## 八、最近一起玩过 + 一键邀请
+
+- `recentPlayers`：从 `tables.players` 里反查同桌过的人（排除机器人和自己），
+  按最近一次同局时间倒序。
+- 大厅直接列出来，可以私聊。
+- 开桌等人的时候，牌桌里列「叫个人来」，点一下就给对方发邀请（私聊 + 提醒）。
+
+## 九、成就：定义权在插件
+
+平台只存「谁在什么时候解锁了哪个 id」：
+
+```sql
+user_achievements(user_id, game_id, achievement_id, table_id, unlocked_at)
+PRIMARY KEY (user_id, game_id, achievement_id)
+```
+
+- **成就的名字、说明、徽章长什么样（emoji + 颜色）全部来自插件 manifest 的
+  `achievements` 字段**，平台不认识任何具体成就。
+- 插件在 `reduce` / `onEnter` 里 `ctx.emit({ type: 'achievement', player, key })`。
+- 平台只认 manifest 里声明过的 key（写错不落库），同一人同一成就只记一次，
+  机器人不记，解锁后给那个人发一条提醒。
+- 个人主页按解锁时间倒序列出徽章；点开能看到说明和所属游戏。
+- 现有三个游戏各自声明了自己的成就：骰子（首胜 / 六六大顺）、
+  曼荼罗（首次染指 / 大丰收）、纸牌帮（开张大吉 / 全身而退 / 滴水不漏）。
+
+## 十、接口一览
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
-| GET | `/api/users/search?q=` | 按昵称片段 / `名字#编号` 检索人 |
-| GET | `/api/users/:id` | 用户主页：战绩、关注关系、拉黑状态 |
-| GET | `/api/social/pulse` | 铃铛上的两个数 |
-| POST | `/api/social/seen` | 打开消息页，清提醒 |
-| GET | `/api/social/overview` | 分组 + 关注 + 粉丝 + 黑名单 |
-| POST/DELETE/PATCH | `/api/social/follow`、`/api/social/follow/:id` | 关注、取关、改分组、标特别关注 |
-| POST/PATCH/DELETE | `/api/social/groups[/:id]` | 分组的增删改 |
-| POST/DELETE | `/api/social/block/:id` | 拉黑 / 取消拉黑 |
-| GET | `/api/dm` | 会话列表（带未读数） |
-| GET/POST | `/api/dm/:id` | 读会话（顺带标记已读）、发消息 |
-| GET | `/api/admin/ratings?gameId=` | 完整榜单（含隐藏行） |
-| POST | `/api/admin/ratings/hide` | 隐藏 / 放回 |
+| POST | `/api/auth/register` | `{account, name?, password}` |
+| POST | `/api/auth/login` | `{account, password}` |
+| PATCH | `/api/me/profile` | `{name?, signature?, avatar?}` |
+| POST | `/api/me/avatar` | 原始二进制图片（默认关闭） |
+| GET | `/api/users/search?q=` | 账户精确/前缀、昵称包含 |
+| GET | `/api/users/:id` | 主页：资料、战绩、成就、关注/拉黑状态 |
+| GET | `/api/notifications` / POST `.../read` | 提醒列表 / 全部已读 |
+| GET | `/api/subscriptions` / POST / DELETE `/:kind/:target` | 订阅管理 |
+| GET | `/api/players/recent` | 最近一起玩过的人 |
+| POST | `/api/tables/:id/invite` | 邀请某人来这张桌 |
+| GET | `/api/dm`、`/api/dm/:id`、POST `/api/dm/:id` | 会话列表 / 对话 / 发消息 |
+| GET/POST/DELETE/PATCH | `/api/social/*` | 关注、分组、拉黑 |
+| GET/POST | `/api/admin/ratings`、`/api/admin/ratings/hide` | 榜单隐藏 |
 
-## 六、验证
+## 十一、迁移注意
 
-`tests/social.test.ts` 起一个真的 PGlite 跑迁移，覆盖：同名注册、编号唯一、
-登录名两种写法、检索、分组增删、特别关注、拉黑双向、私聊未读/已读、
-新粉丝计数、排行榜隐藏与恢复。
+- `010_accounts.sql`：补 `account`（从昵称去掉 `#编号`）、删 `tag` 列、建唯一索引，
+  再建 `notifications` / `subscriptions` / `user_achievements`。
+- **在这之前的备份恢复不了**（老备份里没有 `account` 列），要恢复先升级表结构。
+- 老牌桌里座位上的名字还是当时写进去的（带 `#编号`），会一直留到那一局结束；
+  新开的桌都是纯昵称。
+- 上传头像的目录是 `storage/avatars/`，备份脚本不包含它（图片丢了重新选一个就行）。
 
-端到端脚本 `.preview/social-e2e.mjs` 走真实 HTTP + WebSocket：注册两个同名人 →
-重名登录提示 → 关注/分组/特别关注 → 私聊/拉黑 → 打一局骰子造出 Elo →
-管理员隐藏某人 → 榜上果然看不见了。
+## 十二、验证
 
-## 七、迁移注意
+`tests/social.test.ts` 起一个真的 PGlite 跑迁移，覆盖：账户唯一、同名昵称、
+资料修改、检索、关注分组、拉黑、私聊、提醒、订阅、成就幂等、最近一起玩过、
+排行榜隐藏。
 
-- 迁移 `009_social_identity.sql` 会给 `users.tag` 补号并设 `NOT NULL`，然后建唯一索引。
-  **在这之前的备份恢复不了**（老备份里没有 `tag` 列），要恢复先升级表结构。
-- 老牌桌的座位名是当时写进去的（没有 `#编号`），会一直保留到那一局结束；
-  新开的桌都是 `名字#编号`。
-- 编号只保证唯一、不保证好记；同一个人换设备登录要带上自己那一串。
+端到端 `.preview/accounts-e2e.mjs` 走真实 HTTP + WebSocket：注册两个同名不同账户 →
+账户登录 → 改资料 → 关注/提醒 → 订阅开桌 → 打一局骰子（@提及 + 解锁成就）→
+查看最近一起玩过 → 邀请进桌 → 全部已读。

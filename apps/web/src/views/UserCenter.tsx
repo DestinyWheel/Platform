@@ -3,12 +3,13 @@ import { api, type Session } from '../api';
 import { copyText, selectText } from '../clipboard';
 import { formatTime } from '../format';
 import { ChangePassword } from './ChangePassword';
+import { ProfileEdit } from './ProfileEdit';
 import { SocialPanel } from './SocialPanel';
 
 interface InviteInfo {
   code: string | null;
   createdAt: number | null;
-  invited: { id: string; name: string; tag: string; createdAt: number }[];
+  invited: { id: string; account: string; name: string; createdAt: number }[];
 }
 
 /**
@@ -98,13 +99,13 @@ export function UserCenter({
       <section>
         <h2>账号</h2>
         <dl className="facts">
+          <dt>账户名</dt>
+          <dd>
+            {session.user.account}
+            <span className="muted small">　登录用它，注册后不可改</span>
+          </dd>
           <dt>昵称</dt>
           <dd>{session.user.name}</dd>
-          <dt>编号</dt>
-          <dd>
-            #{session.user.tag}
-            <span className="muted small">　别人登录、找你的时候要带上它</span>
-          </dd>
           <dt>身份</dt>
           <dd>{session.user.isAdmin ? '管理员' : '成员'}</dd>
         </dl>
@@ -112,6 +113,8 @@ export function UserCenter({
           改密码
         </button>
       </section>
+
+      <ProfileEdit session={session} onSession={onSession} />
 
       <SocialPanel onOpenProfile={onOpenProfile} onMessage={onMessage} />
 
@@ -154,7 +157,9 @@ export function UserCenter({
               <li key={person.id} className="table-row">
                 <div>
                   <div className="game-name">{person.name}</div>
-                  <div className="muted small">加入于 {formatTime(person.createdAt)}</div>
+                  <div className="muted small">
+                    @{person.account} · 加入于 {formatTime(person.createdAt)}
+                  </div>
                 </div>
               </li>
             ))}

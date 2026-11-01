@@ -4,10 +4,12 @@ import type {
   LeaderboardEntry,
   PlayerStatsRow,
   RecentMatchRow,
+  RecentPlayer,
   SocialPulse,
   TableSummary,
 } from '@platform/sdk';
 import { api, type Session } from '../api';
+import { Avatar } from '../Avatar';
 
 const STATUS_LABEL: Record<string, string> = {
   lobby: '等待中',
@@ -25,6 +27,8 @@ export function Lobby({
   onGame,
   onDocs,
   onMessages,
+  onProfile,
+  onMessage,
 }: {
   session: Session;
   onOpen: (tableId: string) => void;
@@ -35,13 +39,20 @@ export function Lobby({
   onGame: (gameId: string) => void;
   onDocs: () => void;
   onMessages: () => void;
+  onProfile: (userId: string) => void;
+  onMessage: (userId: string) => void;
 }) {
   const [games, setGames] = useState<GameManifest[]>([]);
   const [mine, setMine] = useState<TableSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [gameQuery, setGameQuery] = useState('');
-  const [pulse, setPulse] = useState<SocialPulse>({ unreadDms: 0, newFollowers: 0, total: 0 });
+  const [pulse, setPulse] = useState<SocialPulse>({
+    unreadDms: 0,
+    unreadNotifications: 0,
+    total: 0,
+  });
+  const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
 
   const [perGame, setPerGame] = useState<PlayerStatsRow[]>([]);
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
@@ -74,9 +85,13 @@ export function Lobby({
         setRecent(data.recent);
       })
       .catch(() => undefined);
+    api
+      .recentPlayers()
+      .then((data) => setRecentPlayers(data.players))
+      .catch(() => undefined);
   }, []);
 
-  // 铃铛：未读私聊 + 新粉丝。10 秒一次，够用又不吵
+  // 铃铛：未读私聊 + 未读提醒。10 秒一次，够用又不吵
   useEffect(() => {
     let cancelled = false;
     const load = (): void => {
@@ -238,6 +253,29 @@ export function Lobby({
                 <div className={`badge ${table.status}`}>{STATUS_LABEL[table.status]}</div>
                 <button className="primary" onClick={() => onOpen(table.id)}>
                   {table.myTurn ? '该你走了' : '回到牌桌'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {recentPlayers.length > 0 ? (
+        <section>
+          <h2>最近一起玩过</h2>
+          <ul className="people-list">
+            {recentPlayers.slice(0, 6).map((person) => (
+              <li key={person.id} className="person-row">
+                <Avatar user={person} size={28} />
+                <button className="link person-name" onClick={() => onProfile(person.id)}>
+                  {person.name}
+                </button>
+                <span className="muted small">
+                  @{person.account} · 一起打过 {person.games} 局
+                </span>
+                <span className="spacer" />
+                <button className="ghost small" onClick={() => onMessage(person.id)}>
+                  私聊
                 </button>
               </li>
             ))}

@@ -10,11 +10,14 @@ import type {
   FollowGroup,
   GameManifest,
   LeaderboardEntry,
+  Notification,
   PlayerStatsRow,
   RecentMatchRow,
+  RecentPlayer,
   ReplayPayload,
   SocialOverview,
   SocialPulse,
+  Subscription,
   TableSnapshot,
   TableSummary,
   UserCard,
@@ -131,29 +134,65 @@ export const api = {
     request<{
       code: string | null;
       createdAt: number | null;
-      invited: { id: string; name: string; tag: string; createdAt: number }[];
+      invited: { id: string; account: string; name: string; createdAt: number }[];
     }>('/me/invite'),
 
   /** 生成我的邀请码，只能生成一次；已经有了服务端回 409 */
   generateInvite: () => request<{ code: string }>('/me/invite', { method: 'POST' }),
 
-  register: (input: { name: string; password: string; confirm: string; code?: string; remember?: boolean }) =>
+  register: (input: {
+    account: string;
+    /** 昵称选填，不填就用账户名 */
+    name?: string;
+    password: string;
+    confirm: string;
+    code?: string;
+    remember?: boolean;
+  }) =>
     request<{ token: string; user: AuthUser }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
 
-  login: (input: { name: string; password: string; remember?: boolean }) =>
+  login: (input: { account: string; password: string; remember?: boolean }) =>
     request<{ token: string; user: AuthUser }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
 
-  claim: (input: { name: string; password: string; remember?: boolean }) =>
+  claim: (input: { account: string; password: string; remember?: boolean }) =>
     request<{ token: string; user: AuthUser }>('/auth/claim', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+
+  /** 改昵称 / 头像 / 签名（账户不可改） */
+  updateProfile: (input: {
+    name?: string;
+    signature?: string | null;
+    avatar?: string | null;
+  }) =>
+    request<{ user: AuthUser }>('/me/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+
+  /** 上传头像（默认关闭；开了才有入口） */
+  uploadAvatar: async (file: ArrayBuffer): Promise<{ user: AuthUser }> => {
+    const headers: Record<string, string> = { 'content-type': 'application/octet-stream' };
+    if (authToken) headers.authorization = `Bearer ${authToken}`;
+    const response = await fetch('/api/me/avatar', { method: 'POST', headers, body: file });
+    const text = await response.text();
+    const payload = text ? (JSON.parse(text) as { code?: string; message?: string }) : {};
+    if (!response.ok) {
+      throw new ApiError(
+        payload.code ?? 'http_error',
+        payload.message ?? `上传失败 (${response.status})`,
+        response.status,
+      );
+    }
+    return payload as { user: AuthUser };
+  },
 
   logout: () => request<{ ok: true }>('/auth/logout', { method: 'POST' }),
 
@@ -231,17 +270,50 @@ export const api = {
 
   /* ------------------------------ 用户 / 社交 ------------------------------ */
 
-  /** 按昵称片段或 #编号 找人 */
+  /** 按账户或昵称找人 */
   searchUsers: (query: string) =>
     request<{ users: UserCard[] }>(`/users/search?q=${encodeURIComponent(query)}`),
 
   userProfile: (id: string) => request<{ profile: UserProfile }>(`/users/${encodeURIComponent(id)}`),
 
-  /** 首页铃铛：未读私聊 + 新关注 */
+  /** 首页铃铛：未读私聊 + 未读提醒 */
   pulse: () => request<{ pulse: SocialPulse }>('/social/pulse'),
 
   /** 打开消息页：把所有提醒标记成已读 */
   markSeen: () => request<{ pulse: SocialPulse }>('/social/seen', { method: 'POST' }),
+
+  /* ------------------------------ 提醒 ------------------------------ */
+
+  notifications: () =>
+    request<{ notifications: Notification[]; pulse: SocialPulse }>('/notifications'),
+
+  readNotifications: () =>
+    request<{ pulse: SocialPulse }>('/notifications/read', { method: 'POST' }),
+
+  /* ------------------------------ 订阅 ------------------------------ */
+
+  subscriptions: () => request<{ subscriptions: Subscription[] }>('/subscriptions'),
+
+  subscribe: (kind: 'game' | 'user', target: string) =>
+    request<{ ok: true }>('/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify({ kind, target }),
+    }),
+
+  unsubscribe: (kind: 'game' | 'user', target: string) =>
+    request<{ ok: true }>(`/subscriptions/${kind}/${encodeURIComponent(target)}`, {
+      method: 'DELETE',
+    }),
+
+  /** 最近一起玩过的人 */
+  recentPlayers: () => request<{ players: RecentPlayer[] }>('/players/recent'),
+
+  /** 邀请某人来这张桌：给他发一条带房间号的私聊 + 提醒 */
+  inviteToTable: (tableId: string, userId: string) =>
+    request<{ message: DirectMessage }>(`/tables/${encodeURIComponent(tableId)}/invite`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    }),
 
   socialOverview: () => request<SocialOverview>('/social/overview'),
 

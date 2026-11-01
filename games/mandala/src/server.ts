@@ -210,6 +210,17 @@ function finishGame(state: MandalaState, ctx: ActionContext<MandalaState>, reaso
     key: 'mandala.gameEnd',
     args: { ranking: state.ranking, scores, reason },
   });
+
+  // 成就：定义在 manifest.achievements 里
+  for (const winner of state.ranking[0] ?? []) {
+    ctx.emit({ type: 'achievement', player: winner, key: 'first-win' });
+  }
+  for (const player of state.players) {
+    if ((scores[player] ?? 0) >= 40) {
+      ctx.emit({ type: 'achievement', player, key: 'big-harvest' });
+    }
+  }
+
   ctx.goTo('finished');
 }
 

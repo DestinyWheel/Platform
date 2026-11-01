@@ -56,6 +56,26 @@ const manifestSchema = z
     ui: z.object({ hideLog: z.boolean().optional() }).optional(),
     /** 要不要 Elo / 排行榜；合作游戏写 false，平台就不给它算分、也不摆排行榜 */
     elo: z.boolean().optional(),
+    /**
+     * 成就：定义和徽章外观都归插件，平台只存「谁解锁了哪个 id」。
+     * 解锁靠动作里 emit `{ type: 'achievement', player, key }`。
+     */
+    achievements: z
+      .array(
+        z.object({
+          id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/, '成就 id 只能用小写字母/数字/连字符'),
+          name: z.string().trim().min(1).max(30),
+          description: z.string().trim().min(1).max(120),
+          icon: z.string().trim().min(1).max(8),
+          color: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/, 'color 要写成 #rrggbb')
+            .optional(),
+          secret: z.boolean().optional(),
+        }),
+      )
+      .max(40)
+      .optional(),
   })
   .refine((manifest) => manifest.players.max >= manifest.players.min, {
     message: 'players.max 不能小于 players.min',

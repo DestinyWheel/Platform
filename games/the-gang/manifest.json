@@ -1,7 +1,7 @@
 {
   "id": "the-gang",
   "name": "纸牌帮",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "apiVersion": "^1.0.0",
   "players": {
     "min": 3,
@@ -59,5 +59,28 @@
   "ui": {
     "hideLog": true
   },
-  "elo": false
+  "elo": false,
+  "achievements": [
+    {
+      "id": "first-heist",
+      "name": "开张大吉",
+      "description": "合作抢下第一个金库",
+      "icon": "🔓",
+      "color": "#4a3a1f"
+    },
+    {
+      "id": "clean-getaway",
+      "name": "全身而退",
+      "description": "一起拿下三个金库赢下整局",
+      "icon": "💎",
+      "color": "#1f3f4a"
+    },
+    {
+      "id": "no-alarm",
+      "name": "滴水不漏",
+      "description": "一次警报都没触发就赢了",
+      "icon": "🤫",
+      "color": "#2f4a2f"
+    }
+  ]
 }

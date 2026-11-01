@@ -292,6 +292,37 @@ export function GameDetail({
   const [tab, setTab] = useState<'intro' | 'board'>('intro');
   const [starting, setStarting] = useState(false);
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
+  const [subscribed, setSubscribed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .subscriptions()
+      .then((data) => {
+        if (cancelled) return;
+        setSubscribed(
+          data.subscriptions.some((item) => item.kind === 'game' && item.target === gameId),
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId]);
+
+  const toggleSubscribe = async (): Promise<void> => {
+    setBusy('subscribe');
+    try {
+      if (subscribed) await api.unsubscribe('game', gameId);
+      else await api.subscribe('game', gameId);
+      setSubscribed(!subscribed);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -340,6 +371,16 @@ export function GameDetail({
         <div className="title">{game?.name ?? '游戏详情'}</div>
         <div className="spacer" />
         {game ? <span className="muted small">v{game.version}</span> : null}
+        {game ? (
+          <button
+            className={subscribed ? 'ghost' : 'ghost'}
+            disabled={busy === 'subscribe'}
+            onClick={() => void toggleSubscribe()}
+            title="有人开这个游戏时提醒我"
+          >
+            {subscribed ? '★ 已订阅开桌' : '☆ 订阅开桌提醒'}
+          </button>
+        ) : null}
         {game ? (
           <button className="primary" onClick={() => setStarting(true)}>
             开始

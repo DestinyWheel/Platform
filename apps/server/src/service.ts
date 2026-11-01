@@ -458,6 +458,7 @@ export class TableService {
       table.startedAt = now;
       table.seq += 1;
       this.appendLogs(table, effects, now);
+      await this.recordAchievements(table, effects, now);
       this.refreshDeadline(table, activePlayer, now);
 
       return {
@@ -504,6 +505,7 @@ export class TableService {
       // 人回来了并真的动了一步：连续超时计数清零
       table.timeoutStreak = 0;
       this.appendLogs(table, applied.effects, now);
+      await this.recordAchievements(table, applied.effects, now);
       this.settle(table, applied.activePlayer, now);
 
       return {
@@ -548,6 +550,7 @@ export class TableService {
           table.state = applied.state as BaseState;
           table.seq += 1;
           this.appendLogs(table, applied.effects, at);
+          await this.recordAchievements(table, applied.effects, at);
 
           // 连续超时计数：谁掉线谁负责。三次就判负，免得一桌人等他到天荒地老
           const slowpoke = applied.actor;
@@ -732,7 +735,7 @@ export class TableService {
 
   async chat(
     tableId: string,
-    user: { id: string; name: string; tag?: string },
+    user: { id: string; name: string },
     text: string,
   ): Promise<void> {
     const body = text.trim();
@@ -743,6 +746,7 @@ export class TableService {
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
     await this.store.appendChat(tableId, user.id, displayName(user), body, Date.now());
+    await this.notifyMentions(table, { id: user.id, name: displayName(user) }, body);
     this.bus.publish(tableId);
   }
 
@@ -995,6 +999,109 @@ export class TableService {
   private appendLogs(table: TableRecord, effects: Effect[], now: number): void {
     this.pushLogs(table.log, effects, now);
     if (table.log.length > MAX_LOG) table.log.splice(0, table.log.length - MAX_LOG);
+  }
+
+  /** 铃铛上的两个数（和 app.ts 里那份保持同一口径） */
+  private async pulseOf(userId: string): Promise<{
+    unreadDms: number;
+    unreadNotifications: number;
+    total: number;
+  }> {
+    const [unreadDms, unreadNotifications] = await Promise.all([
+      this.store.countUnreadMessages(userId),
+      this.store.countUnreadNotifications(userId),
+    ]);
+    return { unreadDms, unreadNotifications, total: unreadDms + unreadNotifications };
+  }
+
+  /**
+   * 插件解锁成就。
+   *
+   * 只认 manifest 里声明过的 key —— 插件写错 id 不该在用户页面上留脏数据；
+   * 同一人同一成就只记一次（UNIQUE 约束 + ON CONFLICT DO NOTHING 兜底）。
+   */
+  private async recordAchievements(
+    table: TableRecord,
+    effects: Effect[],
+    now: number,
+  ): Promise<void> {
+    const unlocks = effects.filter(
+      (effect): effect is { type: 'achievement'; player: string; key: string } =>
+        effect.type === 'achievement',
+    );
+    if (unlocks.length === 0) return;
+
+    const manifest = this.host.get(table.gameId, table.gameVersion)?.manifest;
+    const declared = new Map((manifest?.achievements ?? []).map((item) => [item.id, item]));
+    if (declared.size === 0) return;
+
+    for (const unlock of unlocks) {
+      const def = declared.get(unlock.key);
+      if (!def) continue;
+      const seat = table.players.find((player) => player.id === unlock.player && !player.bot);
+      if (!seat) continue;
+
+      const fresh = await this.store.unlockAchievement(
+        unlock.player,
+        table.gameId,
+        unlock.key,
+        table.id,
+        now,
+      );
+      if (!fresh) continue;
+
+      const notification = await this.store.addNotification(unlock.player, {
+        kind: 'achievement',
+        title: `解锁成就「${def.name}」`,
+        body: `${manifest!.name} · ${def.description}`,
+        link: `#/game/${table.gameId}`,
+      });
+      this.bus.publish(`user:${unlock.player}`, { t: 'notice', notification });
+
+      const user = await this.store.getUser(unlock.player);
+      if (user) {
+        this.bus.publish(`user:${unlock.player}`, {
+          t: 'social',
+          pulse: await this.pulseOf(user.id),
+        });
+      }
+    }
+  }
+
+  /**
+   * 牌桌聊天里的 `@账户名`。
+   *
+   * 提及按**账户**认人（昵称可以重复，账户唯一），只提醒同一桌的人：
+   * 不在桌上的人被 @ 到也只会一脸问号。
+   */
+  private async notifyMentions(
+    table: TableRecord,
+    from: { id: string; name: string },
+    body: string,
+  ): Promise<void> {
+    const tokens = new Set(
+      body
+        .split(/\s+/)
+        .filter((token) => token.startsWith('@'))
+        .map((token) => token.slice(1).replace(/[，。！？、,.!?：:；;）)】』"]+$/u, ''))
+        .filter(Boolean),
+    );
+    if (tokens.size === 0) return;
+
+    for (const account of tokens) {
+      const target = await this.store.findUserByAccount(account);
+      if (!target || target.id === from.id) continue;
+      if (!table.players.some((player) => player.id === target.id && !player.bot)) continue;
+
+      const notification = await this.store.addNotification(target.id, {
+        kind: 'mention',
+        title: `${from.name} 在牌桌上 @ 了你`,
+        body: body.length > 80 ? `${body.slice(0, 80)}…` : body,
+        link: `#/table/${table.id}`,
+      });
+      this.bus.publish(`user:${target.id}`, { t: 'notice', notification });
+      this.bus.publish(`user:${target.id}`, { t: 'social', pulse: await this.pulseOf(target.id) });
+    }
   }
 
   private refreshDeadline(table: TableRecord, activePlayer: string | null, now: number): void {

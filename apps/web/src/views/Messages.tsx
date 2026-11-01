@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { DirectMessage, DirectThread, UserCard } from '@platform/sdk';
+import type { DirectMessage, DirectThread, Notification, UserCard } from '@platform/sdk';
 import { api, type Session } from '../api';
 import { formatTime } from '../format';
 
+const KIND_LABEL: Record<string, string> = {
+  mention: '@提及',
+  follow: '关注',
+  subscribe: '订阅',
+  achievement: '成就',
+  system: '邀请',
+};
+
 /**
- * 私聊页。
+ * 消息页：私聊 + 提醒两个页签。
  *
- * 左边是会话列表，右边是对话。没有实时推送时用轮询（8 秒一次会话、5 秒一次对话），
+ * 私聊左边是会话列表，右边是对话。没有实时推送时用轮询（8 秒一次会话、5 秒一次对话），
  * 一个人数不多的私有平台这样就够；以后要上 WS 只换这两个定时器即可。
  */
 export function Messages({
@@ -20,7 +28,10 @@ export function Messages({
   onBack: () => void;
   onOpenProfile: (userId: string) => void;
 }) {
+  const [tab, setTab] = useState<'dm' | 'notices'>('dm');
   const [threads, setThreads] = useState<DirectThread[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadNotices, setUnreadNotices] = useState(0);
   const [peer, setPeer] = useState<UserCard | null>(null);
   const [messages, setMessages] = useState<DirectMessage[]>([]);
   const [text, setText] = useState('');
@@ -29,6 +40,11 @@ export function Messages({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  /** 点提醒里的链接：改 hash，App 自己会跟着切页面 */
+  const openLink = (link: string): void => {
+    location.hash = link;
+  };
 
   const loadThreads = useCallback(async (): Promise<{ threads: DirectThread[] } | undefined> => {
     try {
@@ -60,6 +76,13 @@ export function Messages({
   // 打开页面就算「看过消息」：铃铛归零
   useEffect(() => {
     void api.markSeen().catch(() => undefined);
+    void api
+      .notifications()
+      .then((data) => {
+        setNotifications(data.notifications);
+        setUnreadNotices(data.pulse.unreadNotifications);
+      })
+      .catch(() => undefined);
     void (async () => {
       const data = await loadThreads();
       // 没指定跟谁聊时，直接打开最近的那个会话，省一次点击
@@ -71,6 +94,18 @@ export function Messages({
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadThreads]);
+
+  // 看「提醒」页签就把未读清掉
+  useEffect(() => {
+    if (tab !== 'notices') return;
+    void api
+      .readNotifications()
+      .then((data) => {
+        setUnreadNotices(data.pulse.unreadNotifications);
+        setNotifications((current) => current.map((item) => ({ ...item, readAt: item.readAt ?? Date.now() })));
+      })
+      .catch(() => undefined);
+  }, [tab]);
 
   useEffect(() => {
     if (!initialPeer) return;
@@ -138,19 +173,52 @@ export function Messages({
           ← 大厅
         </button>
         <div className="title">消息</div>
+        <div className="admin-tabs">
+          <button className={tab === 'dm' ? 'active' : ''} onClick={() => setTab('dm')}>
+            私聊
+          </button>
+          <button className={tab === 'notices' ? 'active' : ''} onClick={() => setTab('notices')}>
+            提醒{unreadNotices > 0 ? `（${unreadNotices}）` : ''}
+          </button>
+        </div>
         <div className="spacer" />
         <span className="muted small">{session.user.name}</span>
       </header>
 
       {error ? <div className="error">{error}</div> : null}
 
+      {tab === 'notices' ? (
+        <section className="notice-list">
+          {notifications.length === 0 ? (
+            <p className="muted small">还没有提醒。</p>
+          ) : (
+            <ul className="people-list">
+              {notifications.map((item) => (
+                <li key={item.id} className={item.readAt ? 'person-row' : 'person-row unread'}>
+                  <span className="notice-kind">{KIND_LABEL[item.kind] ?? '提醒'}</span>
+                  <div className="notice-body">
+                    <div>{item.title}</div>
+                    {item.body ? <div className="muted small">{item.body}</div> : null}
+                  </div>
+                  <span className="muted small">{formatTime(item.at)}</span>
+                  {item.link ? (
+                    <button className="ghost small" onClick={() => openLink(item.link!)}>
+                      看看
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : (
       <div className="dm-layout">
         <aside className="dm-list">
           <div className="dm-search">
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按昵称或 #编号 找人"
+              placeholder="按账户名或昵称找人"
               aria-label="找人聊天"
             />
           </div>
@@ -160,6 +228,7 @@ export function Messages({
                 <li key={user.id}>
                   <button className="link" onClick={() => startWith(user)}>
                     {user.name}
+                    <span className="muted small">@{user.account}</span>
                   </button>
                 </li>
               ))}
@@ -241,6 +310,7 @@ export function Messages({
           )}
         </section>
       </div>
+      )}
     </div>
   );
 }

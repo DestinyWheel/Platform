@@ -246,6 +246,8 @@ export function App() {
       onGame={(id) => navigate({ name: 'game', id })}
       onDocs={() => navigate({ name: 'docs' })}
       onMessages={() => navigate({ name: 'messages' })}
+      onProfile={(id) => navigate({ name: 'profile', id })}
+      onMessage={(id) => navigate({ name: 'messages', peer: id })}
       onLogout={() => {
         // 先让服务端把令牌作废（token_version +1），再清本地；
         // 失败也没关系——本地已经清掉了，服务端那份留到过期也进不来这个设备

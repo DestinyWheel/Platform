@@ -13,10 +13,14 @@ import type { Db } from './db/types.js';
 
 export interface UserRecord {
   id: string;
-  /** 原始昵称（可以重复） */
+  /** 账户：登录名，全局唯一、注册后不可改 */
+  account: string;
+  /** 昵称：界面上显示的名字，可以重复、随时可改 */
   name: string;
-  /** 4–6 位数字编号，全局唯一：`名字#编号` 才是完整的称呼 */
-  tag: string;
+  /** 头像：`preset:<id>` / `upload:<id>` / null（按 id 稳定挑一个） */
+  avatar: string | null;
+  /** 一句话签名 */
+  signature: string | null;
   createdAt: number;
   /** 第一个注册的人自动成为管理员（私人平台够用，M3 再加角色表） */
   isAdmin: boolean;
@@ -34,16 +38,9 @@ export interface UserRecord {
   socialSeenAt: number;
 }
 
-/** 展示名：`张三#4821`。拼名字的地方都走它，别各拼各的 */
-export function displayName(user: { name: string; tag?: string | null }): string {
-  return user.tag ? `${user.name}#${user.tag}` : user.name;
-}
-
-/** 4–6 位随机数字编号；不用前导 0，念出来不别扭 */
-export function randomTag(digits: number): string {
-  const min = 10 ** (digits - 1);
-  const max = 10 ** digits;
-  return String(min + Math.floor(Math.random() * (max - min)));
+/** 界面上显示的名字就是昵称（昵称可以重复，重名靠头像和主页区分） */
+export function displayName(user: { name: string }): string {
+  return user.name;
 }
 
 /** 只在登录校验时用；命名上带 secret，避免被顺手塞进接口返回值 */
@@ -126,20 +123,28 @@ export interface TableWrite {
 }
 
 export interface Store {
-  /** 昵称可以重复，所以返回的是一个列表；登录时靠它判断要不要让人选 */
-  findUsersByName(name: string): Promise<UserRecord[]>;
-  /** 带密码材料的登录查询；给了 tag 就精确到人 */
-  findUserWithSecret(name: string, tag?: string): Promise<UserWithSecret | undefined>;
+  /* ------------------------- 账户 / 资料 ------------------------- */
+  /** 登录用：按账户找人 */
+  findUserByAccount(account: string): Promise<UserRecord | undefined>;
+  /** 登录校验：带密码材料，按账户找 */
+  findUserWithSecretByAccount(account: string): Promise<UserWithSecret | undefined>;
   findUserSecretById(id: string): Promise<UserWithSecret | undefined>;
+  /** 建号：账户撞了返回 null（不自动改名），邀请码撞了自动重试 */
   createUser(
+    account: string,
     name: string,
     passwordHash: string | null,
     invitedBy?: string | null,
   ): Promise<UserRecord | null>;
   getUser(id: string): Promise<UserRecord | undefined>;
   getUsersByIds(ids: string[]): Promise<UserRecord[]>;
-  /** 按昵称片段 / #编号 检索人 */
+  /** 检索人：账户精确/前缀、昵称包含 */
   searchUsers(query: string, limit: number): Promise<UserRecord[]>;
+  /** 改昵称 / 头像 / 签名（账户不可改） */
+  updateProfile(
+    id: string,
+    patch: { name?: string; avatar?: string | null; signature?: string | null },
+  ): Promise<UserRecord | undefined>;
   countUsers(): Promise<number>;
   /** 按邀请码找人；注册时用它确认"这个码是谁的" */
   findUserByInviteCode(code: string): Promise<UserRecord | undefined>;
@@ -152,7 +157,7 @@ export interface Store {
   listInvited(
     userId: string,
     limit?: number,
-  ): Promise<{ id: string; name: string; tag: string; createdAt: number }[]>;
+  ): Promise<{ id: string; account: string; name: string; createdAt: number }[]>;
   /** 设密码（注册后补设 / 认领 / 管理员重置）并作废所有旧令牌，返回新的 token_version */
   setPassword(id: string, passwordHash: string): Promise<number>;
   /** 退出登录：作废所有旧令牌 */
@@ -160,6 +165,41 @@ export interface Store {
   touchLogin(id: string): Promise<void>;
   /** 点开「消息」：之前的关注和私聊都算读过了 */
   markSocialSeen(id: string): Promise<void>;
+
+  /* ------------------------- 提醒 ------------------------- */
+  addNotification(
+    userId: string,
+    input: {
+      kind: NotificationRecord['kind'];
+      title: string;
+      body?: string | null;
+      link?: string | null;
+    },
+  ): Promise<NotificationRecord>;
+  listNotifications(userId: string, limit: number): Promise<NotificationRecord[]>;
+  markNotificationsRead(userId: string): Promise<number>;
+  countUnreadNotifications(userId: string): Promise<number>;
+
+  /* ------------------------- 订阅 ------------------------- */
+  addSubscription(userId: string, kind: 'game' | 'user', target: string): Promise<void>;
+  removeSubscription(userId: string, kind: 'game' | 'user', target: string): Promise<void>;
+  listSubscriptions(userId: string): Promise<SubscriptionRecord[]>;
+  /** 订阅了某个游戏 / 某个人的所有用户（不含自己） */
+  subscribersOf(kind: 'game' | 'user', target: string): Promise<string[]>;
+
+  /* ------------------------- 成就 ------------------------- */
+  /** 解锁；已经有的返回 false（同一人同一成就只记一次） */
+  unlockAchievement(
+    userId: string,
+    gameId: string,
+    achievementId: string,
+    tableId: string | null,
+    at: number,
+  ): Promise<boolean>;
+  listAchievements(userId: string): Promise<AchievementRecord[]>;
+
+  /* ------------------------- 最近一起玩过 ------------------------- */
+  recentPlayers(userId: string, limit: number): Promise<{ id: string; at: number; games: number }[]>;
 
   /* ------------------------- 关注 / 拉黑 ------------------------- */
   /** 我的分组；第一次调用会自动建一个「默认分组」 */
@@ -180,7 +220,9 @@ export interface Store {
   ): Promise<FollowRow | undefined>;
   countFollows(userId: string): Promise<{ following: number; followers: number }>;
 
-  listBlocks(userId: string): Promise<{ id: string; name: string; tag: string; at: number }[]>;
+  listBlocks(
+    userId: string,
+  ): Promise<{ id: string; account: string; name: string; avatar: string | null; at: number }[]>;
   block(blockerId: string, blockedId: string): Promise<void>;
   unblock(blockerId: string, blockedId: string): Promise<void>;
   /** a 拉黑了 b，或者 b 拉黑了 a */
@@ -301,8 +343,9 @@ export interface Store {
 /** 管理端看到的用户行：纯读模型，不含任何密码材料 */
 export interface AdminUserRecord {
   id: string;
+  account: string;
   name: string;
-  tag: string;
+  avatar: string | null;
   isAdmin: boolean;
   createdAt: number;
   lastLoginAt: number | null;
@@ -324,8 +367,9 @@ export interface FollowGroupRecord {
 
 export interface FollowRow {
   id: string;
+  account: string;
   name: string;
-  tag: string;
+  avatar: string | null;
   groupId: string | null;
   special: boolean;
   at: number;
@@ -341,9 +385,32 @@ export interface DirectMessageRecord {
 }
 
 export interface DirectThreadRecord {
-  user: { id: string; name: string; tag: string };
+  user: { id: string; account: string; name: string; avatar: string | null };
   last: DirectMessageRecord | null;
   unread: number;
+}
+
+export interface NotificationRecord {
+  id: string;
+  kind: 'mention' | 'follow' | 'subscribe' | 'achievement' | 'system';
+  title: string;
+  body: string | null;
+  link: string | null;
+  at: number;
+  readAt: number | null;
+}
+
+export interface SubscriptionRecord {
+  kind: 'game' | 'user';
+  target: string;
+  at: number;
+}
+
+export interface AchievementRecord {
+  gameId: string;
+  achievementId: string;
+  tableId: string | null;
+  at: number;
 }
 
 export interface ActionRow {
@@ -436,12 +503,14 @@ function toRecord(row: TableRow): TableRecord {
 
 /** 常规查询列；密码哈希**不在**这里，只有 findUserWithSecret 才显式取 */
 const USER_COLUMNS =
-  'id, name, tag, created_at, is_admin, token_version, last_login_at, password_set_at, invite_code, invite_code_at, invited_by, social_seen_at';
+  'id, account, name, avatar, signature, created_at, is_admin, token_version, last_login_at, password_set_at, invite_code, invite_code_at, invited_by, social_seen_at';
 
 interface UserRow {
   id: string;
+  account: string;
   name: string;
-  tag: string;
+  avatar: string | null;
+  signature: string | null;
   created_at: number;
   is_admin: boolean;
   password_hash?: string | null;
@@ -457,8 +526,10 @@ interface UserRow {
 function toUser(row: UserRow): UserRecord {
   return {
     id: row.id,
+    account: row.account,
     name: row.name,
-    tag: row.tag,
+    avatar: row.avatar ?? null,
+    signature: row.signature ?? null,
     createdAt: Number(row.created_at),
     isAdmin: Boolean(row.is_admin),
     hasPassword: row.password_set_at !== null,
@@ -474,20 +545,18 @@ function toUser(row: UserRow): UserRecord {
 export class PgStore implements Store {
   constructor(private readonly db: Db) {}
 
-  async findUsersByName(name: string): Promise<UserRecord[]> {
-    const rows = await this.db.query<UserRow>(
-      `SELECT ${USER_COLUMNS} FROM users WHERE name = $1 ORDER BY created_at ASC`,
-      [name],
-    );
-    return rows.map(toUser);
+  async findUserByAccount(account: string): Promise<UserRecord | undefined> {
+    const rows = await this.db.query<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE account = $1`, [
+      account,
+    ]);
+    const row = rows[0];
+    return row ? toUser(row) : undefined;
   }
 
-  async findUserWithSecret(name: string, tag?: string): Promise<UserWithSecret | undefined> {
+  async findUserWithSecretByAccount(account: string): Promise<UserWithSecret | undefined> {
     const rows = await this.db.query<UserRow>(
-      tag
-        ? `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE name = $1 AND tag = $2 LIMIT 1`
-        : `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE name = $1 LIMIT 1`,
-      tag ? [name, tag] : [name],
+      `SELECT ${USER_COLUMNS}, password_hash FROM users WHERE account = $1 LIMIT 1`,
+      [account],
     );
     const row = rows[0];
     return row ? { ...toUser(row), passwordHash: row.password_hash ?? null } : undefined;
@@ -503,6 +572,7 @@ export class PgStore implements Store {
   }
 
   async createUser(
+    account: string,
     name: string,
     passwordHash: string | null,
     invitedBy: string | null = null,
@@ -510,21 +580,20 @@ export class PgStore implements Store {
     // 第一个注册的人自动成为管理员。is_admin 在 SQL 里算，省掉"先 count 再插"的竞态
     const now = Date.now();
 
-    // 编号和邀请码都可能撞车，撞了就换一个重来——不能把注册搞失败。
-    // 编号先发 4 位，连续撞说明这个号段挤了，再往 5 位、6 位放。
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const digits = attempt < 8 ? 4 : attempt < 10 ? 5 : 6;
+    // 邀请码可能撞车，撞了就换一个重来——不能把注册搞失败。
+    // 账户名撞了直接返回 null（调用方转成"账户已存在"），不自动改名。
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       try {
         const rows = await this.db.query<{ id: string }>(
           `INSERT INTO users
-             (id, name, tag, created_at, is_admin, password_hash, password_set_at, last_login_at,
+             (id, account, name, created_at, is_admin, password_hash, password_set_at, last_login_at,
               invite_code, invite_code_at, invited_by)
            VALUES ($1, $2, $3, $4, NOT EXISTS (SELECT 1 FROM users), $5, $6, $7, $8, $9, $10)
            RETURNING id`,
           [
             randomUUID(),
+            account,
             name,
-            randomTag(digits),
             now,
             passwordHash,
             passwordHash ? now : null,
@@ -536,32 +605,59 @@ export class PgStore implements Store {
         );
         return (await this.getUser(rows[0]!.id)) ?? null;
       } catch (error) {
-        // 23505 = 唯一约束冲突：编号或邀请码撞了，换一个再来
-        if ((error as { code?: string }).code === '23505') continue;
+        const code = (error as { code?: string }).code;
+        if (code === '23505') {
+          // 账户唯一索引撞了 → 就是重名账户，交给调用方回 409；
+          // 否则是邀请码撞了，换一个再来
+          if (await this.findUserByAccount(account)) return null;
+          continue;
+        }
         throw error;
       }
     }
-    throw new Error('分配编号失败，请重试');
+    throw new Error('注册失败，请重试');
   }
 
-  /** 检索人：昵称包含、或者编号以这些数字开头。给关注 / 私聊 / 管理端共用 */
+  /** 检索人：账户精确/前缀，或者昵称包含 */
   async searchUsers(query: string, limit: number): Promise<UserRecord[]> {
     const text = query.trim();
     if (!text) return [];
 
-    // 「张三#4821」整串丢进来也能查到
-    const [rawName, rawTag] = text.includes('#') ? text.split('#') : [text, ''];
-    const exactTag = (rawTag ?? '').trim();
-
     const rows = await this.db.query<UserRow>(
       `SELECT ${USER_COLUMNS} FROM users
-        WHERE ($1 <> '' AND position(lower($1) in lower(name)) > 0)
-           OR ($2 <> '' AND tag = $2)
-        ORDER BY (lower(name) = lower($1)) DESC, created_at ASC
-        LIMIT $3`,
-      [rawName, exactTag, limit],
+        WHERE account = $1
+           OR position(lower($1) in lower(account)) = 1
+           OR position(lower($1) in lower(name)) > 0
+        ORDER BY (account = $1) DESC, (lower(name) = lower($1)) DESC, created_at ASC
+        LIMIT $2`,
+      [text, limit],
     );
     return rows.map(toUser);
+  }
+
+  /** 改昵称 / 头像 / 签名——账户不在这里面，它不可改 */
+  async updateProfile(
+    id: string,
+    patch: { name?: string; avatar?: string | null; signature?: string | null },
+  ): Promise<UserRecord | undefined> {
+    const sets: string[] = [];
+    const values: unknown[] = [id];
+    if (patch.name !== undefined) {
+      values.push(patch.name);
+      sets.push(`name = $${values.length}`);
+    }
+    if (patch.avatar !== undefined) {
+      values.push(patch.avatar);
+      sets.push(`avatar = $${values.length}`);
+    }
+    if (patch.signature !== undefined) {
+      values.push(patch.signature);
+      sets.push(`signature = $${values.length}`);
+    }
+    if (sets.length === 0) return this.getUser(id);
+
+    await this.db.execute(`UPDATE users SET ${sets.join(', ')} WHERE id = $1`, values);
+    return this.getUser(id);
   }
 
   async getUsersByIds(ids: string[]): Promise<UserRecord[]> {
@@ -628,15 +724,15 @@ export class PgStore implements Store {
   async listInvited(
     userId: string,
     limit = 100,
-  ): Promise<{ id: string; name: string; tag: string; createdAt: number }[]> {
-    const rows = await this.db.query<{ id: string; name: string; tag: string; created_at: number }>(
-      'SELECT id, name, tag, created_at FROM users WHERE invited_by = $1 ORDER BY created_at DESC LIMIT $2',
+  ): Promise<{ id: string; account: string; name: string; createdAt: number }[]> {
+    const rows = await this.db.query<{ id: string; account: string; name: string; created_at: number }>(
+      'SELECT id, account, name, created_at FROM users WHERE invited_by = $1 ORDER BY created_at DESC LIMIT $2',
       [userId, limit],
     );
     return rows.map((row) => ({
       id: row.id,
-      name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      name: row.name,
       createdAt: Number(row.created_at),
     }));
   }
@@ -1107,11 +1203,12 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       user_id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       rating: number;
       games: number;
     }>(
-      `SELECT r.user_id, u.name, u.tag, r.rating, r.games
+      `SELECT r.user_id, u.name, u.account, u.avatar, r.rating, r.games
          FROM ratings r JOIN users u ON u.id = r.user_id
         WHERE r.game_id = $1 AND NOT r.hidden
         ORDER BY r.rating DESC, r.games DESC
@@ -1131,12 +1228,13 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       user_id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       rating: number;
       games: number;
       hidden: boolean;
     }>(
-      `SELECT r.user_id, u.name, u.tag, r.rating, r.games, r.hidden
+      `SELECT r.user_id, u.name, u.account, u.avatar, r.rating, r.games, r.hidden
          FROM ratings r JOIN users u ON u.id = r.user_id
         WHERE r.game_id = $1
         ORDER BY r.hidden ASC, r.rating DESC, r.games DESC
@@ -1145,7 +1243,8 @@ export class PgStore implements Store {
     );
     return rows.map((row) => ({
       userId: row.user_id,
-      name: displayName(row),
+      name: row.name,
+      account: row.account,
       rating: Number(row.rating),
       games: Number(row.games),
       hidden: Boolean(row.hidden),
@@ -1242,12 +1341,13 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       group_id: string | null;
       special: boolean;
       created_at: number;
     }>(
-      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+      `SELECT u.id, u.name, u.account, u.avatar, f.group_id, f.special, f.created_at
          FROM follows f JOIN users u
            ON u.id = ${where === 'f.follower_id' ? 'f.followee_id' : 'f.follower_id'}
         WHERE ${where} = $1
@@ -1257,7 +1357,8 @@ export class PgStore implements Store {
     return rows.map((row) => ({
       id: row.id,
       name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      avatar: row.avatar ?? null,
       groupId: row.group_id,
       special: Boolean(row.special),
       at: Number(row.created_at),
@@ -1290,12 +1391,13 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       group_id: string | null;
       special: boolean;
       created_at: number;
     }>(
-      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+      `SELECT u.id, u.name, u.account, u.avatar, f.group_id, f.special, f.created_at
          FROM follows f JOIN users u ON u.id = f.followee_id
         WHERE f.follower_id = $1 AND f.followee_id = $2`,
       [followerId, followeeId],
@@ -1304,7 +1406,8 @@ export class PgStore implements Store {
     return {
       id: row.id,
       name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      avatar: row.avatar ?? null,
       groupId: row.group_id,
       special: Boolean(row.special),
       at: Number(row.created_at),
@@ -1345,12 +1448,13 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       group_id: string | null;
       special: boolean;
       created_at: number;
     }>(
-      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+      `SELECT u.id, u.name, u.account, u.avatar, f.group_id, f.special, f.created_at
          FROM follows f JOIN users u ON u.id = f.followee_id
         WHERE f.follower_id = $1 AND f.followee_id = $2`,
       [followerId, followeeId],
@@ -1360,7 +1464,8 @@ export class PgStore implements Store {
     return {
       id: row.id,
       name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      avatar: row.avatar ?? null,
       groupId: row.group_id,
       special: Boolean(row.special),
       at: Number(row.created_at),
@@ -1380,9 +1485,17 @@ export class PgStore implements Store {
     };
   }
 
-  async listBlocks(userId: string): Promise<{ id: string; name: string; tag: string; at: number }[]> {
-    const rows = await this.db.query<{ id: string; name: string; tag: string; created_at: number }>(
-      `SELECT u.id, u.name, u.tag, b.created_at
+  async listBlocks(
+    userId: string,
+  ): Promise<{ id: string; account: string; name: string; avatar: string | null; at: number }[]> {
+    const rows = await this.db.query<{
+      id: string;
+      account: string;
+      name: string;
+      avatar: string | null;
+      created_at: number;
+    }>(
+      `SELECT u.id, u.name, u.account, u.avatar, b.created_at
          FROM blocks b JOIN users u ON u.id = b.blocked_id
         WHERE b.blocker_id = $1
         ORDER BY b.created_at DESC`,
@@ -1391,7 +1504,8 @@ export class PgStore implements Store {
     return rows.map((row) => ({
       id: row.id,
       name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      avatar: row.avatar ?? null,
       at: Number(row.created_at),
     }));
   }
@@ -1447,12 +1561,13 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       group_id: string | null;
       special: boolean;
       created_at: number;
     }>(
-      `SELECT u.id, u.name, u.tag, f.group_id, f.special, f.created_at
+      `SELECT u.id, u.name, u.account, u.avatar, f.group_id, f.special, f.created_at
          FROM follows f JOIN users u ON u.id = f.followee_id
         WHERE f.follower_id = $1 AND f.followee_id = $2`,
       [followerId, followeeId],
@@ -1462,7 +1577,8 @@ export class PgStore implements Store {
     return {
       id: row.id,
       name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      avatar: row.avatar ?? null,
       groupId: row.group_id,
       special: Boolean(row.special),
       at: Number(row.created_at),
@@ -1530,7 +1646,8 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       peer: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       id: string | null;
       sender_id: string | null;
       recipient_id: string | null;
@@ -1546,7 +1663,7 @@ export class PgStore implements Store {
           WHERE sender_id = $1 OR recipient_id = $1
           GROUP BY peer
        )
-       SELECT p.peer, u.name, u.tag,
+       SELECT p.peer, u.name, u.account, u.avatar,
               m.id, m.sender_id, m.recipient_id, m.body, m.created_at, m.read_at,
               COALESCE(unread.n, 0)::int AS unread
          FROM pairs p
@@ -1568,7 +1685,7 @@ export class PgStore implements Store {
     );
 
     return rows.map((row) => ({
-      user: { id: row.peer, name: displayName(row), tag: row.tag },
+      user: { id: row.peer, account: row.account, name: row.name, avatar: row.avatar ?? null },
       last: row.id
         ? {
             id: row.id,
@@ -1664,7 +1781,8 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       id: string;
       name: string;
-      tag: string;
+      account: string;
+      avatar: string | null;
       is_admin: boolean;
       created_at: number;
       last_login_at: number | null;
@@ -1673,7 +1791,7 @@ export class PgStore implements Store {
       games: number;
       wins: number;
     }>(
-      `SELECT u.id, u.name, u.tag, u.is_admin, u.created_at, u.last_login_at, u.password_set_at,
+      `SELECT u.id, u.name, u.account, u.avatar, u.is_admin, u.created_at, u.last_login_at, u.password_set_at,
               u.token_version,
               count(m.table_id)::int AS games,
               COALESCE(sum(CASE WHEN m.is_win THEN 1 ELSE 0 END), 0)::int AS wins
@@ -1687,8 +1805,9 @@ export class PgStore implements Store {
 
     return rows.map((row) => ({
       id: row.id,
-      name: displayName(row),
-      tag: row.tag,
+      account: row.account,
+      name: row.name,
+      avatar: row.avatar ?? null,
       isAdmin: Boolean(row.is_admin),
       createdAt: Number(row.created_at),
       lastLoginAt: row.last_login_at === null ? null : Number(row.last_login_at),
@@ -1709,6 +1828,179 @@ export class PgStore implements Store {
     );
     return Number(rows[0]?.n ?? 0);
   }
+
+  /* ------------------------- 提醒 ------------------------- */
+
+  async addNotification(
+    userId: string,
+    input: {
+      kind: NotificationRecord['kind'];
+      title: string;
+      body?: string | null;
+      link?: string | null;
+    },
+  ): Promise<NotificationRecord> {
+    const id = randomUUID();
+    const at = Date.now();
+    await this.db.execute(
+      `INSERT INTO notifications (id, user_id, kind, title, body, link, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, userId, input.kind, input.title, input.body ?? null, input.link ?? null, at],
+    );
+    return {
+      id,
+      kind: input.kind,
+      title: input.title,
+      body: input.body ?? null,
+      link: input.link ?? null,
+      at,
+      readAt: null,
+    };
+  }
+
+  async listNotifications(userId: string, limit: number): Promise<NotificationRecord[]> {
+    const rows = await this.db.query<{
+      id: string;
+      kind: NotificationRecord['kind'];
+      title: string;
+      body: string | null;
+      link: string | null;
+      created_at: number;
+      read_at: number | null;
+    }>(
+      `SELECT id, kind, title, body, link, created_at, read_at
+         FROM notifications WHERE user_id = $1
+        ORDER BY created_at DESC LIMIT $2`,
+      [userId, limit],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      title: row.title,
+      body: row.body,
+      link: row.link,
+      at: Number(row.created_at),
+      readAt: row.read_at === null ? null : Number(row.read_at),
+    }));
+  }
+
+  async markNotificationsRead(userId: string): Promise<number> {
+    const rows = await this.db.query<{ id: string }>(
+      `UPDATE notifications SET read_at = $2 WHERE user_id = $1 AND read_at IS NULL RETURNING id`,
+      [userId, Date.now()],
+    );
+    return rows.length;
+  }
+
+  async countUnreadNotifications(userId: string): Promise<number> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL',
+      [userId],
+    );
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  /* ------------------------- 订阅 ------------------------- */
+
+  async addSubscription(userId: string, kind: 'game' | 'user', target: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO subscriptions (user_id, kind, target, created_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (user_id, kind, target) DO NOTHING`,
+      [userId, kind, target, Date.now()],
+    );
+  }
+
+  async removeSubscription(userId: string, kind: 'game' | 'user', target: string): Promise<void> {
+    await this.db.execute(
+      'DELETE FROM subscriptions WHERE user_id = $1 AND kind = $2 AND target = $3',
+      [userId, kind, target],
+    );
+  }
+
+  async listSubscriptions(userId: string): Promise<SubscriptionRecord[]> {
+    const rows = await this.db.query<{ kind: 'game' | 'user'; target: string; created_at: number }>(
+      `SELECT kind, target, created_at FROM subscriptions
+        WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId],
+    );
+    return rows.map((row) => ({ kind: row.kind, target: row.target, at: Number(row.created_at) }));
+  }
+
+  async subscribersOf(kind: 'game' | 'user', target: string): Promise<string[]> {
+    const rows = await this.db.query<{ user_id: string }>(
+      'SELECT user_id FROM subscriptions WHERE kind = $1 AND target = $2',
+      [kind, target],
+    );
+    return rows.map((row) => row.user_id);
+  }
+
+  /* ------------------------- 成就 ------------------------- */
+
+  async unlockAchievement(
+    userId: string,
+    gameId: string,
+    achievementId: string,
+    tableId: string | null,
+    at: number,
+  ): Promise<boolean> {
+    const rows = await this.db.query<{ user_id: string }>(
+      `INSERT INTO user_achievements (user_id, game_id, achievement_id, table_id, unlocked_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (user_id, game_id, achievement_id) DO NOTHING
+       RETURNING user_id`,
+      [userId, gameId, achievementId, tableId, at],
+    );
+    return rows.length > 0;
+  }
+
+  async listAchievements(userId: string): Promise<AchievementRecord[]> {
+    const rows = await this.db.query<{
+      game_id: string;
+      achievement_id: string;
+      table_id: string | null;
+      unlocked_at: number;
+    }>(
+      `SELECT game_id, achievement_id, table_id, unlocked_at
+         FROM user_achievements WHERE user_id = $1
+        ORDER BY unlocked_at DESC`,
+      [userId],
+    );
+    return rows.map((row) => ({
+      gameId: row.game_id,
+      achievementId: row.achievement_id,
+      tableId: row.table_id,
+      at: Number(row.unlocked_at),
+    }));
+  }
+
+  /* ------------------------- 最近一起玩过 ------------------------- */
+
+  async recentPlayers(
+    userId: string,
+    limit: number,
+  ): Promise<{ id: string; at: number; games: number }[]> {
+    // tables.players 是 jsonb 数组，@> 让 Postgres 自己判断"这张桌里有我"
+    const rows = await this.db.query<{ id: string; at: number; games: number }>(
+      `WITH mine AS (
+         SELECT id, players, COALESCE(finished_at, started_at, created_at) AS at
+           FROM tables
+          WHERE players @> $1::jsonb
+       ),
+       others AS (
+         SELECT p->>'id' AS other_id, m.id AS table_id, m.at
+           FROM mine m CROSS JOIN LATERAL jsonb_array_elements(m.players) p
+          WHERE p->>'id' <> $2
+            AND COALESCE(p->>'bot', 'false') <> 'true'
+       )
+       SELECT other_id AS id, max(at) AS at, count(DISTINCT table_id)::int AS games
+         FROM others
+        GROUP BY other_id
+        ORDER BY at DESC
+        LIMIT $3`,
+      [JSON.stringify([{ id: userId }]), userId, limit],
+    );
+    return rows.map((row) => ({ id: row.id, at: Number(row.at), games: Number(row.games) }));
+  }
 }
 
 /** 备份时按这个顺序导出；恢复时按反序清空 */
@@ -1726,6 +2018,9 @@ const DUMP_TABLES = [
   'follows',
   'blocks',
   'direct_messages',
+  'notifications',
+  'subscriptions',
+  'user_achievements',
 ] as const;
 
 interface GameVersionRow {

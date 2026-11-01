@@ -85,6 +85,13 @@ export interface GameManifest {
    * 插件在终局 `ranking` 里报了名次的话，战绩和回放照记，只是没有分数。
    */
   elo?: boolean;
+  /**
+   * 这个游戏的成就。**定义权和外观都归插件**：平台只存「谁解锁了哪个 id」，
+   * 名字、说明、徽章长什么样都从这份声明里读。
+   *
+   * 解锁方式：在动作里 `ctx.emit({ type: 'achievement', player, key })`。
+   */
+  achievements?: AchievementDef[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -98,7 +105,12 @@ export type Effect =
   | { type: 'notify'; player: PlayerId; key: string; args?: Record<string, unknown> }
   /** 推动计时器（不填则由宿主按上桌顺序推导） */
   | { type: 'clock'; player: PlayerId; ms: number }
-  | { type: 'sound'; key: string };
+  | { type: 'sound'; key: string }
+  /**
+   * 解锁成就。`key` 必须是 manifest.achievements 里声明过的 id；
+   * 平台去重（同一人同一成就只记一次），并给那个人发一条提醒。
+   */
+  | { type: 'achievement'; player: PlayerId; key: string };
 
 export interface LogEntry {
   seq: number;
@@ -286,16 +298,19 @@ export interface LeaderboardEntry {
 /* ------------------------- 用户 / 社交 ------------------------- */
 
 /**
- * 昵称可以重复，所以「名字」不再是身份，#编号 才是。
+ * 一个人有两样东西：
  *
- * 展示一律用 `name`（服务端已经拼好 `名字#编号`），需要拆开时用 `tag`。
+ * - `account`：账户，全局唯一、不可改，**登录用它**
+ * - `name`：昵称，随便改、可以重名，界面上显示的是它
  */
 export interface UserCard {
   id: PlayerId;
-  /** 展示名，形如 `张三#4821` */
+  /** 账户（登录名），全局唯一 */
+  account: string;
+  /** 昵称，可以重复 */
   name: string;
-  /** 4–6 位数字编号，全局唯一 */
-  tag: string;
+  /** 头像：`preset:<id>` / `upload:<id>` / null（按 id 稳定挑一个） */
+  avatar: string | null;
 }
 
 export interface DirectMessage {
@@ -341,14 +356,40 @@ export interface SocialOverview {
 export interface SocialPulse {
   /** 未读私聊条数 */
   unreadDms: number;
-  /** 上次看消息之后新关注我的人 */
-  newFollowers: number;
+  /** 未读的提醒（@提及 / 新粉丝 / 订阅 / 成就） */
+  unreadNotifications: number;
   total: number;
+}
+
+/* ------------------------- 提醒 / 订阅 ------------------------- */
+
+export type NotificationKind = 'mention' | 'follow' | 'subscribe' | 'achievement' | 'system';
+
+export interface Notification {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string | null;
+  /** 点开跳哪儿，形如 `#/table/xxx`；空就不跳 */
+  link: string | null;
+  at: number;
+  readAt: number | null;
+}
+
+/** 订阅：某个游戏开桌、或者某个人开桌时提醒我 */
+export interface Subscription {
+  kind: 'game' | 'user';
+  target: string;
+  /** 给人看的名字（游戏名 / 昵称） */
+  label: string;
+  at: number;
 }
 
 export interface UserProfile extends UserCard {
   createdAt: number;
+  signature: string | null;
   stats: PlayerStatsRow[];
+  achievements: UnlockedAchievement[];
   following: boolean;
   followedBy: boolean;
   /** 关注时他所在的（我的）分组 */
@@ -363,10 +404,50 @@ export interface UserProfile extends UserCard {
   followingCount: number;
 }
 
+/* ------------------------- 成就 ------------------------- */
+
+/**
+ * 成就由**游戏插件**定义，平台只负责记「谁在什么时候解锁了哪一个」。
+ *
+ * 徽章长什么样也归插件：给一个 emoji + 一个颜色，平台照着画。
+ * 这样加新成就只要发个新版插件，不用动平台代码。
+ */
+export interface AchievementDef {
+  /** 插件内唯一，比如 `first-win` */
+  id: string;
+  name: string;
+  description: string;
+  /** 徽章上的字：一个 emoji 最好认 */
+  icon: string;
+  /** 徽章底色，十六进制；不填用平台默认 */
+  color?: string;
+  /** 隐藏成就：没解锁时不显示名字，只显示「？？？」 */
+  secret?: boolean;
+}
+
+export interface UnlockedAchievement {
+  gameId: string;
+  gameName: string;
+  def: AchievementDef;
+  /** 解锁时间 */
+  at: number;
+  /** 在哪张桌解锁的，可以点回去看回放 */
+  tableId: string | null;
+}
+
+/** 最近一起玩过的人（大厅开桌时一键邀请用） */
+export interface RecentPlayer extends UserCard {
+  /** 最近一次同桌的时间 */
+  at: number;
+  /** 一起打过几局 */
+  games: number;
+}
+
 /** 管理端：某个游戏的完整榜单（含被隐藏的） */
 export interface AdminRatingRow {
   userId: PlayerId;
   name: string;
+  account: string;
   rating: number;
   games: number;
   hidden: boolean;
@@ -471,7 +552,11 @@ export interface TableSummary {
 
 export interface AdminUserRow {
   id: PlayerId;
+  /** 账户名（登录用） */
+  account: string;
+  /** 昵称（展示用） */
   name: string;
+  avatar: string | null;
   isAdmin: boolean;
   createdAt: number;
   lastLoginAt: number | null;
@@ -524,14 +609,18 @@ export type ServerMessage =
   /** 有人私聊我：直接推到对方那条连接上 */
   | { t: 'dm'; message: DirectMessage }
   /** 关注 / 未读变化，前端拿它刷新铃铛 */
-  | { t: 'social'; pulse: SocialPulse };
+  | { t: 'social'; pulse: SocialPulse }
+  /** 新的提醒（@提及 / 订阅 / 成就）：前端插一条并刷新铃铛 */
+  | { t: 'notice'; notification: Notification };
 
 export interface AuthUser {
   id: PlayerId;
-  /** 展示名，已带 `#编号` */
+  /** 账户：登录名，全局唯一、不可改 */
+  account: string;
+  /** 昵称：界面上显示的名字，可以重复、可以改 */
   name: string;
-  /** 4–6 位数字编号 */
-  tag: string;
+  /** 头像：`preset:<id>` / `upload:<id>` / null（按 id 稳定挑一个） */
+  avatar: string | null;
   /** 管理员才有的管理端入口（插件上传、指标、备份） */
   isAdmin?: boolean;
 }
@@ -543,3 +632,7 @@ export type {
   GameClient,
   GameClientContext,
 } from './client.js';
+
+/* 头像预设：前后端共用同一份 */
+export { AVATAR_PRESETS, avatarOf, isPresetAvatar } from './avatar.js';
+export type { AvatarPreset } from './avatar.js';

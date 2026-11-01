@@ -108,6 +108,16 @@ const states: Record<string, StateDef<DiceState>> = {
           key: 'dice.gameEnd',
           args: { ranking: state.ranking, scores: { ...state.scores } },
         });
+
+        // 成就：定义写在 manifest.achievements 里，平台只负责记「谁解锁了哪个 id」
+        for (const winner of state.ranking[0] ?? []) {
+          ctx.emit({ type: 'achievement', player: winner, key: 'first-win' });
+        }
+        for (const player of state.players) {
+          if ((state.scores[player] ?? 0) >= state.rounds * 6) {
+            ctx.emit({ type: 'achievement', player, key: 'perfect-roll' });
+          }
+        }
       }
     },
   },

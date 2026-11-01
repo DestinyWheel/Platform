@@ -5,9 +5,9 @@ import { PasswordField } from '../PasswordField';
 type Mode = 'login' | 'register' | 'claim';
 
 const HINT: Record<Mode, string> = {
-  login: '用昵称和密码登录。',
+  login: '用账户名和密码登录。账户名是注册时定的，改不了；界面上显示的是昵称。',
   register:
-    '第一次来就注册一个。密码至少 8 位，平台不发邮件，忘了只能找管理员重置。有邀请码就填上，没有也能注册。',
+    '第一次来就注册一个。账户名用来登录，全局唯一；昵称是别人看到的名字，可以随便改、可以重名。密码至少 8 位，平台不发邮件，忘了只能找管理员重置。',
   claim: '这个账号是旧版「输昵称就能进」时期创建的，还没有密码。现在设一个，原来的战绩和评分都还在。',
 };
 
@@ -25,17 +25,16 @@ export function Login({
   notice?: string | null;
 }) {
   const [mode, setMode] = useState<Mode>('login');
-  const [name, setName] = useState('');
+  const [account, setAccount] = useState('');
+  const [nickname, setNickname] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [code, setCode] = useState('');
   const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** 昵称可重复：只写昵称撞上重名时，把候选账号列出来让人点 */
-  const [candidates, setCandidates] = useState<{ id: string; name: string; tag: string }[]>([]);
 
-  const trimmed = name.trim();
+  const trimmed = account.trim();
   const needPassword = mode === 'login' ? 1 : 8;
   const ready =
     !busy &&
@@ -46,7 +45,6 @@ export function Login({
   const switchMode = (next: Mode): void => {
     setMode(next);
     setError(null);
-    setCandidates([]);
     setPassword('');
     setConfirm('');
   };
@@ -61,15 +59,16 @@ export function Login({
       const session =
         mode === 'register'
           ? await api.register({
-              name: trimmed,
+              account: trimmed,
+              ...(nickname.trim() ? { name: nickname.trim() } : {}),
               password,
               confirm,
               ...(code.trim() ? { code: code.trim().toUpperCase() } : {}),
               remember,
             })
           : mode === 'claim'
-            ? await api.claim({ name: trimmed, password, remember })
-            : await api.login({ name: trimmed, password, remember });
+            ? await api.claim({ account: trimmed, password, remember })
+            : await api.login({ account: trimmed, password, remember });
 
       onLogin({ token: session.token, user: session.user });
     } catch (err) {
@@ -77,15 +76,6 @@ export function Login({
       if (err instanceof ApiError && err.code === 'password_not_set') {
         setMode('claim');
         setError(null);
-        return;
-      }
-      // 重名：把候选人摆出来，点一下自动带上 #编号
-      if (err instanceof ApiError && err.code === 'name_ambiguous') {
-        const list =
-          (err.details as { candidates?: { id: string; name: string; tag: string }[] } | undefined)
-            ?.candidates ?? [];
-        setCandidates(list);
-        setError('这个昵称有好几个人，点一个（会自动带上 #编号）');
         return;
       }
       setError((err as Error).message);
@@ -122,17 +112,28 @@ export function Login({
         {notice ? <div className="notice">{notice}</div> : null}
 
         <label className="field">
-          <span>昵称</span>
+          <span>账户名</span>
           <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="2–20 个字符"
+            value={account}
+            onChange={(event) => setAccount(event.target.value)}
+            placeholder={mode === 'register' ? '2–20 个字符，不能有空格' : '注册时定的账户名'}
             maxLength={20}
             autoComplete="username"
             autoFocus
-            disabled={mode === 'claim'}
           />
         </label>
+
+        {mode === 'register' ? (
+          <label className="field">
+            <span>昵称（选填）</span>
+            <input
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              placeholder="别人看到的名字，不填就用账户名"
+              maxLength={20}
+            />
+          </label>
+        ) : null}
 
         <PasswordField
           label="密码"
@@ -178,24 +179,6 @@ export function Login({
           <div className="error">两次输入的密码不一样</div>
         ) : null}
         {error ? <div className="error">{error}</div> : null}
-        {candidates.length > 0 ? (
-          <div className="chip-row">
-            {candidates.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className="chip"
-                onClick={() => {
-                  setName(candidate.name);
-                  setCandidates([]);
-                  setError(null);
-                }}
-              >
-                {candidate.name}
-              </button>
-            ))}
-          </div>
-        ) : null}
 
         <button type="submit" className="primary" disabled={!ready}>
           {busy ? '处理中…' : TITLE[mode]}

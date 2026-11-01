@@ -1,10 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
+import type { RecentPlayer } from '@platform/sdk';
 import { api, type Session } from '../api';
+import { Avatar } from '../Avatar';
 import { copyText } from '../clipboard';
 import { GameSurface, GameSidePanel } from '../host/GameSurface';
 import { useGameClient } from '../host/useGameClient';
 import { renderLog } from '../log';
 import { useTableSocket } from '../useTableSocket';
+
+/**
+ * 聊天里的 @账户名 高亮。
+ *
+ * 提及按账户认人（昵称可以重复），所以这里只认 ASCII/汉字/数字/下划线组成的 token。
+ */
+function renderMentions(body: string) {
+  const parts = body.split(/(@[\w\u4e00-\u9fa5-]{1,20})/g);
+  return parts.map((part, index) =>
+    part.startsWith('@') ? (
+      <mark key={index} className="mention">
+        {part}
+      </mark>
+    ) : (
+      part
+    ),
+  );
+}
 
 const STATUS_LABEL = {
   lobby: '等待中',
@@ -78,6 +98,36 @@ export function TableView({
   const [busy, setBusy] = useState<string | null>(null);
   /** 已经点过"我知道了"的版本；服务端也会记，这里只是让弹窗立刻消失 */
   const [ackedVersion, setAckedVersion] = useState<string | null>(null);
+  /** 开局前：最近一起玩过的人，一键邀请 */
+  const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
+  const [invited, setInvited] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (snapshot?.status !== 'lobby' || !snapshot.you.isPlayer) return;
+    let cancelled = false;
+    api
+      .recentPlayers()
+      .then((data) => {
+        if (!cancelled) setRecentPlayers(data.players);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshot?.status, snapshot?.you.isPlayer]);
+
+  const invite = async (userId: string): Promise<void> => {
+    setBusy(`invite:${userId}`);
+    setActionError(null);
+    try {
+      await api.inviteToTable(tableId, userId);
+      setInvited((current) => ({ ...current, [userId]: true }));
+    } catch (err) {
+      setActionError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const logRef = useRef<HTMLUListElement | null>(null);
   const chatRef = useRef<HTMLUListElement | null>(null);
@@ -244,6 +294,7 @@ export function TableView({
               if (player.id === session.user.id) classes.push('me');
               return (
                 <div key={player.id} className={classes.join(' ')}>
+                  <Avatar user={{ id: player.id, avatar: (player as { avatar?: string | null }).avatar }} size={22} />
                   {player.bot || !onProfile ? (
                     <span className="seat-name">{player.name}</span>
                   ) : (
@@ -297,6 +348,33 @@ export function TableView({
                   ? `房间号 ${snapshot.code}：念给朋友，或者把链接发过去。`
                   : '链接发给朋友，他们在同一个地址打开就能加入。'}
               </div>
+
+              {recentPlayers.length > 0 ? (
+                <div className="invite-box">
+                  <div className="muted small">叫个人来（最近一起玩过的）：</div>
+                  <div className="invite-list">
+                    {recentPlayers
+                      .filter(
+                        (person) =>
+                          !snapshot.players.some((player) => player.id === person.id),
+                      )
+                      .slice(0, 6)
+                      .map((person) => (
+                        <button
+                          key={person.id}
+                          className="chip"
+                          disabled={busy === `invite:${person.id}` || invited[person.id]}
+                          onClick={() => void invite(person.id)}
+                          title={`@${person.account}`}
+                        >
+                          <Avatar user={person} size={18} />
+                          {person.name}
+                          {invited[person.id] ? ' ✓' : ''}
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : (
             <GameSurface
@@ -350,7 +428,7 @@ export function TableView({
               {snapshot.chat.map((message) => (
                 <li key={message.id} className={message.userId === session.user.id ? 'mine' : ''}>
                   <span className="chat-name">{message.name}</span>
-                  <span className="chat-body">{message.body}</span>
+                  <span className="chat-body">{renderMentions(message.body)}</span>
                 </li>
               ))}
               {snapshot.chat.length === 0 ? <li className="muted">还没有人说话</li> : null}

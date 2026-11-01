@@ -466,6 +466,7 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
           <table className="stats-table admin-table">
             <thead>
               <tr>
+                <th>账户</th>
                 <th>昵称</th>
                 <th>权限</th>
                 <th>注册时间</th>
@@ -478,6 +479,7 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
             <tbody>
               {users.map((user) => (
                 <tr key={user.id} className={user.id === session.user.id ? 'me' : ''}>
+                  <td className="mono small">{user.account}</td>
                   <td>
                     {user.name}
                     {user.id === session.user.id ? <span className="muted small">（我）</span> : null}
@@ -509,7 +511,7 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
               ))}
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="muted">
+                  <td colSpan={8} className="muted">
                     还没有用户
                   </td>
                 </tr>
@@ -544,7 +546,7 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
               className="game-search"
               value={ratingQuery}
               onChange={(event) => setRatingQuery(event.target.value)}
-              placeholder="按昵称或 #编号 检索"
+              placeholder="按账户名或昵称检索"
               aria-label="检索榜上的人"
             />
             <span className="muted small">

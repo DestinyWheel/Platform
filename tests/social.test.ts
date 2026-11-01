@@ -1,5 +1,5 @@
 /**
- * 社交 / 身份层：昵称可重复 + #编号、关注分组、私聊、排行榜隐藏。
+ * 社交 / 身份层：账户 + 昵称、关注分组、私聊、提醒、订阅、成就、排行榜隐藏。
  *
  * 这几块都落在 SQL 上（唯一索引、LATERAL 聚合、级联），单测纯函数没意义，
  * 所以这里起一个真的 PGlite 跑迁移，再拿 PgStore 走一遍。
@@ -10,8 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { createDb, migrate } from '../apps/server/src/db/index.ts';
-import { splitLoginName } from '../apps/server/src/app.ts';
-import { PgStore, displayName, randomTag } from '../apps/server/src/store.ts';
+import { PgStore, displayName } from '../apps/server/src/store.ts';
 
 /* ------------------------------ 准备 ------------------------------ */
 
@@ -27,66 +26,66 @@ after(async () => {
 
 /* ------------------------------ 身份 ------------------------------ */
 
-test('#编号 是 4–6 位数字，不重复', async () => {
-  const seen = new Set<string>();
-  for (let i = 0; i < 200; i += 1) {
-    const tag = randomTag(4);
-    assert.match(tag, /^[1-9]\d{3}$/, '4 位、不带前导零');
-    seen.add(tag);
-  }
-  // 200 次里撞几个很正常，但整体应该接近 9000 的容量，不会挤在一起
-  assert.ok(seen.size > 190, `200 次只生成了 ${seen.size} 个不同编号`);
+test('账户全局唯一，昵称可以重复', async () => {
+  const a = await store.createUser('zhangsan', '张三', 'hash-a');
+  const dup = await store.createUser('zhangsan', '另一个张三', 'hash-b');
+  const b = await store.createUser('lisi', '张三', 'hash-c');
 
-  assert.equal(randomTag(6).length, 6);
-});
-
-test('昵称可以重复，靠 #编号 区分，登录名两种写法都认', async () => {
-  const a = await store.createUser('张三', 'hash-a');
-  const b = await store.createUser('张三', 'hash-b');
   assert.ok(a && b);
-  assert.notEqual(a.id, b.id);
-  assert.notEqual(a.tag, b.tag, '同名的人编号必须不同');
+  assert.equal(dup, null, '同一个账户名不能再注册');
 
-  assert.equal(displayName(a), `张三#${a.tag}`);
+  assert.equal(a.account, 'zhangsan');
+  assert.equal(a.name, '张三');
+  assert.equal(displayName(a), '张三', '展示的就是昵称，不带编号');
 
-  const same = await store.findUsersByName('张三');
-  assert.equal(same.length, 2, '同名两个人都在');
+  // 两个人昵称一样，账户不同
+  const same = await store.searchUsers('张三', 10);
+  assert.equal(same.filter((row) => row.name === '张三').length, 2, '同名两个人都在');
 
-  const byTag = await store.findUserWithSecret('张三', a.tag);
-  assert.equal(byTag?.id, a.id, '带编号就能精确找到人');
-  assert.equal(byTag?.passwordHash, 'hash-a');
-
-  assert.deepEqual(splitLoginName('张三'), { name: '张三' });
-  assert.deepEqual(splitLoginName('张三#4821'), { name: '张三', tag: '4821' });
-  // 昵称里本来就可能带 #，没有 4–6 位数字就不切
-  assert.deepEqual(splitLoginName('#1 粉丝'), { name: '#1 粉丝' });
-  assert.deepEqual(splitLoginName(' 李四#123456 '), { name: '李四', tag: '123456' });
+  const byAccount = await store.findUserWithSecretByAccount('zhangsan');
+  assert.equal(byAccount?.id, a.id);
+  assert.equal(byAccount?.passwordHash, 'hash-a');
+  assert.equal(await store.findUserWithSecretByAccount('nobody'), undefined);
 });
 
-test('检索人：昵称片段和编号都能查', async () => {
-  const user = await store.createUser('王小明', 'hash');
+test('改昵称 / 头像 / 签名，账户不动', async () => {
+  const user = await store.createUser('profile_owner', '旧昵称', 'hash');
   assert.ok(user);
 
-  const hits = await store.searchUsers('小明', 10);
-  assert.ok(hits.some((row) => row.id === user.id), '按昵称片段能查到');
+  const updated = await store.updateProfile(user.id, {
+    name: '新昵称',
+    signature: '只玩合作游戏',
+    avatar: 'preset:fox',
+  });
+  assert.equal(updated?.name, '新昵称');
+  assert.equal(updated?.signature, '只玩合作游戏');
+  assert.equal(updated?.avatar, 'preset:fox');
+  assert.equal(updated?.account, 'profile_owner', '账户不跟着改');
 
-  const byFull = await store.searchUsers(`王小明#${user.tag}`, 10);
-  assert.ok(byFull.some((row) => row.id === user.id), '整串 名字#编号 也能查');
+  // 昵称重复也没关系
+  const other = await store.createUser('dup_name_owner', '新昵称', 'hash');
+  assert.ok(other);
+});
 
-  // 只写 #编号 时不能退化成"匹配所有人"（空串在 SQL 里 position = 1）
-  const byTagOnly = await store.searchUsers(`#${user.tag}`, 10);
-  assert.deepEqual(
-    byTagOnly.map((row) => row.id),
-    [user.id],
-    '只写 #编号 只能查到这一个人',
-  );
+test('检索人：账户精确/前缀、昵称片段都能查', async () => {
+  const user = await store.createUser('wangxiaoming', '王小明', 'hash');
+  assert.ok(user);
+
+  const byName = await store.searchUsers('小明', 10);
+  assert.ok(byName.some((row) => row.id === user.id), '按昵称片段能查到');
+
+  const byAccount = await store.searchUsers('wangxiao', 10);
+  assert.ok(byAccount.some((row) => row.id === user.id), '按账户前缀能查到');
+
+  const exact = await store.searchUsers('wangxiaoming', 10);
+  assert.equal(exact[0]?.id, user.id, '账户精确匹配排第一');
 });
 
 /* ------------------------------ 关注 ------------------------------ */
 
 test('关注有分组、能标特别关注，粉丝数跟着动', async () => {
-  const me = await store.createUser('我', 'h');
-  const other = await store.createUser('他', 'h');
+  const me = await store.createUser('acct1', '我', 'h');
+  const other = await store.createUser('acct2', '他', 'h');
   assert.ok(me && other);
 
   const groups = await store.listFollowGroups(me.id);
@@ -112,8 +111,8 @@ test('关注有分组、能标特别关注，粉丝数跟着动', async () => {
 });
 
 test('删分组不会删关注：人回到默认分组', async () => {
-  const me = await store.createUser('我2', 'h');
-  const other = await store.createUser('他2', 'h');
+  const me = await store.createUser('acct3', '我2', 'h');
+  const other = await store.createUser('acct4', '他2', 'h');
   assert.ok(me && other);
 
   const [defaults] = [await store.listFollowGroups(me.id)];
@@ -136,8 +135,8 @@ test('删分组不会删关注：人回到默认分组', async () => {
 /* ------------------------------ 拉黑 ------------------------------ */
 
 test('拉黑是双向可查的', async () => {
-  const a = await store.createUser('黑A', 'h');
-  const b = await store.createUser('黑B', 'h');
+  const a = await store.createUser('acct5', '黑A', 'h');
+  const b = await store.createUser('acct6', '黑B', 'h');
   assert.ok(a && b);
 
   assert.equal(await store.hasBlockBetween(a.id, b.id), false);
@@ -154,8 +153,8 @@ test('拉黑是双向可查的', async () => {
 /* ------------------------------ 私聊 ------------------------------ */
 
 test('私聊：未读、已读、会话列表都对得上', async () => {
-  const alice = await store.createUser('爱丽丝', 'h');
-  const bob = await store.createUser('鲍勃', 'h');
+  const alice = await store.createUser('acct7', '爱丽丝', 'h');
+  const bob = await store.createUser('acct8', '鲍勃', 'h');
   assert.ok(alice && bob);
 
   await store.saveDirectMessage(alice.id, bob.id, '在吗', 1000);
@@ -183,8 +182,8 @@ test('私聊：未读、已读、会话列表都对得上', async () => {
 });
 
 test('新粉丝计数只看「上次看过消息」之后', async () => {
-  const star = await store.createUser('小星', 'h');
-  const fan = await store.createUser('粉丝', 'h');
+  const star = await store.createUser('acct9', '小星', 'h');
+  const fan = await store.createUser('acct10', '粉丝', 'h');
   assert.ok(star && fan);
 
   const before = star.socialSeenAt;
@@ -201,8 +200,8 @@ test('新粉丝计数只看「上次看过消息」之后', async () => {
 /* ------------------------------ 排行榜隐藏 ------------------------------ */
 
 test('隐藏某人：榜上不再出现，放回来就回来', async () => {
-  const p1 = await store.createUser('榜一', 'h');
-  const p2 = await store.createUser('榜二', 'h');
+  const p1 = await store.createUser('acct11', '榜一', 'h');
+  const p2 = await store.createUser('acct12', '榜二', 'h');
   assert.ok(p1 && p2);
 
   const gameId = 'demo-game';
@@ -217,7 +216,7 @@ test('隐藏某人：榜上不再出现，放回来就回来', async () => {
 
   let board = await store.listRatings(gameId, 10);
   assert.equal(board.length, 2);
-  assert.equal(board[0]!.name, displayName(p1), '榜上显示带编号的名字');
+  assert.equal(board[0]!.name, p1.name, '榜上显示昵称');
 
   assert.equal(await store.setRatingHidden(gameId, p1.id, true, p2.id), true);
 
@@ -235,4 +234,128 @@ test('隐藏某人：榜上不再出现，放回来就回来', async () => {
   await store.setRatingHidden(gameId, p1.id, false, p2.id);
   board = await store.listRatings(gameId, 10);
   assert.equal(board.length, 2, '放回来就重新出现');
+});
+
+/* ------------------------------ 提醒 ------------------------------ */
+
+test('提醒：未读计数、倒序列表、一次清空', async () => {
+  const me = await store.createUser('acct13', '提醒测试', 'h');
+  assert.ok(me);
+
+  await store.addNotification(me.id, { kind: 'mention', title: 'A @ 了你', link: '#/table/x' });
+  await store.addNotification(me.id, { kind: 'achievement', title: '解锁成就', body: '首胜' });
+
+  assert.equal(await store.countUnreadNotifications(me.id), 2);
+
+  const list = await store.listNotifications(me.id, 10);
+  assert.equal(list.length, 2);
+  assert.equal(list[0]!.title, '解锁成就', '新的在前');
+  assert.equal(list[0]!.readAt, null);
+
+  assert.equal(await store.markNotificationsRead(me.id), 2);
+  assert.equal(await store.countUnreadNotifications(me.id), 0);
+  assert.equal(await store.markNotificationsRead(me.id), 0, '重复调用不会重复标记');
+});
+
+/* ------------------------------ 订阅 ------------------------------ */
+
+test('订阅：同一个目标只会有一条，取消就没了', async () => {
+  const me = await store.createUser('acct14', '订阅测试', 'h');
+  const other = await store.createUser('acct15', '被订阅的人', 'h');
+  assert.ok(me && other);
+
+  await store.addSubscription(me.id, 'game', 'dice');
+  await store.addSubscription(me.id, 'game', 'dice');
+  await store.addSubscription(me.id, 'user', other.id);
+
+  const list = await store.listSubscriptions(me.id);
+  assert.equal(list.length, 2, '重复订阅不会多出一条');
+
+  assert.deepEqual(await store.subscribersOf('game', 'dice'), [me.id]);
+  assert.deepEqual(await store.subscribersOf('user', other.id), [me.id]);
+
+  await store.removeSubscription(me.id, 'game', 'dice');
+  assert.equal((await store.listSubscriptions(me.id)).length, 1);
+  assert.deepEqual(await store.subscribersOf('game', 'dice'), []);
+});
+
+/* ------------------------------ 成就 ------------------------------ */
+
+test('成就：同一人同一成就只记一次，列表按时间倒序', async () => {
+  const me = await store.createUser('acct16', '成就测试', 'h');
+  assert.ok(me);
+
+  assert.equal(await store.unlockAchievement(me.id, 'dice', 'first-win', 't1', 1000), true);
+  assert.equal(
+    await store.unlockAchievement(me.id, 'dice', 'first-win', 't2', 2000),
+    false,
+    '第二次解锁不重复记',
+  );
+  assert.equal(await store.unlockAchievement(me.id, 'mandala', 'big-harvest', null, 1500), true);
+
+  const list = await store.listAchievements(me.id);
+  assert.equal(list.length, 2);
+  assert.equal(list[0]!.gameId, 'mandala', '按解锁时间倒序：1500 比 1000 晚');
+  assert.equal(list[1]!.gameId, 'dice');
+  assert.equal(list[1]!.at, 1000, '重复解锁时保留第一次的时间');
+});
+
+/* ------------------------------ 最近一起玩过 ------------------------------ */
+
+test('最近一起玩过：按同桌时间倒序，机器人不算人', async () => {
+  const me = await store.createUser('acct17', '我', 'h');
+  const friend = await store.createUser('acct18', '牌友', 'h');
+  assert.ok(me && friend);
+
+  const base = {
+    gameId: 'dice',
+    gameVersion: '0.1.0',
+    hostId: me.id,
+    status: 'finished' as const,
+    maxPlayers: 4,
+    options: {},
+    state: null,
+    seq: 1,
+    log: [],
+    deadlineAt: null,
+    mode: 'realtime' as const,
+    pace: 'normal',
+    turnMs: 20000,
+    windowStart: null,
+    windowEnd: null,
+    timeoutStreak: 0,
+    friendly: false,
+    createdAt: 1,
+    startedAt: 1,
+    finishedAt: 1,
+    result: null,
+  };
+
+  await store.createTable({
+    ...base,
+    id: 'table-recent-1',
+    code: 'AAAAAA',
+    players: [
+      { id: me.id, name: me.name, seat: 0, bot: false },
+      { id: friend.id, name: friend.name, seat: 1, bot: false },
+      { id: 'bot-1', name: '机器人 2', seat: 2, bot: true },
+    ],
+    finishedAt: 1000,
+  });
+  await store.createTable({
+    ...base,
+    id: 'table-recent-2',
+    code: 'BBBBBB',
+    players: [
+      { id: me.id, name: me.name, seat: 0, bot: false },
+      { id: friend.id, name: friend.name, seat: 1, bot: false },
+    ],
+    finishedAt: 2000,
+  });
+
+  const recent = await store.recentPlayers(me.id, 10);
+  assert.equal(recent.length, 1, '只有真人牌友，机器人不算');
+  assert.equal(recent[0]!.id, friend.id);
+  assert.equal(recent[0]!.games, 2, '两局都算上');
+  assert.equal(recent[0]!.at, 2000, '时间是最近那一局');
 });

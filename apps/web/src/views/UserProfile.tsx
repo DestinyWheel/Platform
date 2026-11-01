@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { UserProfile as Profile } from '@platform/sdk';
 import { api, type Session } from '../api';
+import { Avatar } from '../Avatar';
 import { formatTime } from '../format';
 
 /**
@@ -115,11 +116,19 @@ export function UserProfile({
       ) : (
         <>
           <section className="profile-head">
-            <div>
-              <div className="profile-name">{profile.name}</div>
-              <div className="muted small">加入于 {formatTime(profile.createdAt)}</div>
-              <div className="muted small">
-                关注 {profile.followingCount} · 粉丝 {profile.followerCount}
+            <div className="profile-id">
+              <Avatar user={profile} size={64} />
+              <div>
+                <div className="profile-name">{profile.name}</div>
+                <div className="muted small">
+                  @{profile.account} · 加入于 {formatTime(profile.createdAt)}
+                </div>
+                {profile.signature ? (
+                  <div className="profile-signature">{profile.signature}</div>
+                ) : null}
+                <div className="muted small">
+                  关注 {profile.followingCount} · 粉丝 {profile.followerCount}
+                </div>
               </div>
             </div>
             <div className="profile-actions">
@@ -127,29 +136,20 @@ export function UserProfile({
                 <span className="muted small">这是你自己</span>
               ) : (
                 <>
-                  {profile.following ? (
-                    <>
-                      <button className="ghost" disabled={busy === 'follow'} onClick={() => void unfollow()}>
-                        取消关注
-                      </button>
-                      <button
-                        className={profile.followedBy ? 'ghost' : 'primary'}
-                        disabled={busy === 'follow'}
-                        onClick={() => void onMessage(profile.id)}
-                      >
-                        私聊
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="primary" disabled={busy === 'follow'} onClick={() => void follow()}>
-                        关注
-                      </button>
-                      <button className="ghost" onClick={() => void onMessage(profile.id)}>
-                        私聊
-                      </button>
-                    </>
-                  )}
+                  <button
+                    className={profile.following ? 'ghost' : 'primary'}
+                    disabled={busy === 'follow'}
+                    onClick={() => void (profile.following ? unfollow() : follow())}
+                  >
+                    {profile.following ? '取消关注' : '关注'}
+                  </button>
+                  <button
+                    className={profile.followedBy ? 'ghost' : 'primary'}
+                    disabled={busy === 'follow'}
+                    onClick={() => void onMessage(profile.id)}
+                  >
+                    私聊
+                  </button>
                 </>
               )}
             </div>
@@ -211,6 +211,34 @@ export function UserProfile({
                   ))}
                 </tbody>
               </table>
+            )}
+          </section>
+
+          <section>
+            <h2>成就{profile.achievements.length > 0 ? `（${profile.achievements.length}）` : ''}</h2>
+            {profile.achievements.length === 0 ? (
+              <p className="muted small">还没解锁任何成就。</p>
+            ) : (
+              <ul className="badge-list">
+                {profile.achievements.map((item) => (
+                  <li
+                    key={`${item.gameId}:${item.def.id}`}
+                    className="badge-card"
+                    title={`${item.def.description}　（${item.gameName} · ${formatTime(item.at)}）`}
+                  >
+                    <span
+                      className="badge-icon"
+                      style={{ background: item.def.color ?? '#2b3441' }}
+                    >
+                      {item.def.icon}
+                    </span>
+                    <span>
+                      <span className="badge-name">{item.def.name}</span>
+                      <span className="muted small">　{item.gameName}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
 

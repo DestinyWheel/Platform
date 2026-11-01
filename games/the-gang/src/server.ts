@@ -676,6 +676,13 @@ const states: Record<string, StateDef<GangState>> = {
           seats: seats.map((seat) => ({ player: seat.player, chip: seat.chip })),
         },
       });
+
+      // 成就：抢下第一个金库的人人有份（合作局，功劳是大家的）
+      if (badAt === null) {
+        for (const player of state.players) {
+          ctx.emit({ type: 'achievement', player, key: 'first-heist' });
+        }
+      }
     },
   },
 
@@ -701,6 +708,16 @@ const states: Record<string, StateDef<GangState>> = {
             limit: state.alarmsToLose,
           },
         });
+
+        // 成就：三个人一起赢下来才叫「全身而退」
+        if (state.vaults >= 3) {
+          for (const player of state.players) {
+            ctx.emit({ type: 'achievement', player, key: 'clean-getaway' });
+            if (state.alarms === 0) {
+              ctx.emit({ type: 'achievement', player, key: 'no-alarm' });
+            }
+          }
+        }
         return;
       }
 
