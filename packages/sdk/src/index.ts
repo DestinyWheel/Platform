@@ -313,6 +313,15 @@ export interface UserCard {
   avatar: string | null;
 }
 
+/** 邀请消息里那张桌：够画一张卡片，也够拼出邀请链接 */
+export interface DirectInvite {
+  tableId: string;
+  /** 房间号；没有码的老桌是 null，靠 tableId 进 */
+  code: string | null;
+  gameId: string;
+  gameName: string;
+}
+
 export interface DirectMessage {
   id: string;
   from: PlayerId;
@@ -321,6 +330,11 @@ export interface DirectMessage {
   at: number;
   /** 对方读过的时间；null = 还没读 */
   readAt: number | null;
+  /** 'invite' = 叫你打一局，前端画成卡片；老消息没这个字段，按 text 处理 */
+  kind?: 'text' | 'invite';
+  /** 点开跳哪儿，形如 `#/join/ABC234` */
+  link?: string | null;
+  invite?: DirectInvite | null;
 }
 
 /** 会话列表里的一行（按对方聚合，不按消息） */

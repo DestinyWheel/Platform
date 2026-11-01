@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DirectMessage, DirectThread, Notification, UserCard } from '@platform/sdk';
 import { api, type Session } from '../api';
+import { copyText } from '../clipboard';
 import { formatTime } from '../format';
+import { absoluteUrl, goTo, renderLinks } from '../links';
 
 const KIND_LABEL: Record<string, string> = {
   mention: '@提及',
@@ -10,6 +12,56 @@ const KIND_LABEL: Record<string, string> = {
   achievement: '成就',
   system: '邀请',
 };
+
+/**
+ * 私聊里的邀请：一张卡片，点「进入牌桌」直接进去。
+ *
+ * 以前邀请是一条纯文字（`…房间号 ABC234：#/join/ABC234`），对方得自己选中、
+ * 复制、再粘到地址栏——等于没给链接。现在链接单独存在消息里，这里只负责画。
+ */
+function InviteCard({ message }: { message: DirectMessage }) {
+  const [copied, setCopied] = useState(false);
+  const invite = message.invite;
+  if (!invite) return null;
+
+  const link = message.link ?? (invite.code ? `#/join/${invite.code}` : `#/table/${invite.tableId}`);
+
+  const copy = async (): Promise<void> => {
+    if (await copyText(absoluteUrl(link))) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
+  return (
+    <div className="dm-invite">
+      <div className="dm-invite-title">「{invite.gameName}」</div>
+      {invite.code ? (
+        <div className="dm-invite-code">
+          房间号 <code>{invite.code}</code>
+        </div>
+      ) : null}
+      <div className="row">
+        <a
+          className="dm-invite-go"
+          href={link}
+          onClick={(event) => {
+            event.preventDefault();
+            goTo(link);
+          }}
+        >
+          进入牌桌
+        </a>
+        <button className="ghost small" onClick={() => void copy()}>
+          {copied ? '已复制' : '复制链接'}
+        </button>
+      </div>
+      {invite.code ? (
+        <div className="muted small">已经开打了也能进去看（观战）。</div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * 消息页：私聊 + 提醒两个页签。
@@ -276,7 +328,11 @@ export function Messages({
                     key={message.id}
                     className={message.from === session.user.id ? 'dm-bubble mine' : 'dm-bubble'}
                   >
-                    <div className="dm-body">{message.body}</div>
+                    {message.kind === 'invite' && message.invite ? (
+                      <InviteCard message={message} />
+                    ) : (
+                      <div className="dm-body">{renderLinks(message.body)}</div>
+                    )}
                     <div className="dm-time">{formatTime(message.at)}</div>
                   </div>
                 ))}

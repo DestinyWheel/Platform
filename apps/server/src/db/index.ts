@@ -20,6 +20,7 @@ const MIGRATIONS = [
   { version: 8, file: '008_modes.sql' },
   { version: 9, file: '009_social_identity.sql' },
   { version: 10, file: '010_accounts.sql' },
+  { version: 11, file: '011_dm_invite.sql' },
 ];
 
 export interface DbOptions {

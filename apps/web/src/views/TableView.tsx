@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { RecentPlayer } from '@platform/sdk';
 import { api, type Session } from '../api';
 import { Avatar } from '../Avatar';
 import { copyText } from '../clipboard';
 import { GameSurface, GameSidePanel } from '../host/GameSurface';
 import { useGameClient } from '../host/useGameClient';
+import { absoluteUrl, renderLinks } from '../links';
 import { renderLog } from '../log';
 import { useTableSocket } from '../useTableSocket';
 
 /**
- * 聊天里的 @账户名 高亮。
+ * 聊天里的 @账户名 高亮，粘进来的链接（`#/join/ABC234`、http 地址）也跟着可点。
  *
  * 提及按账户认人（昵称可以重复），所以这里只认 ASCII/汉字/数字/下划线组成的 token。
  */
@@ -21,7 +22,7 @@ function renderMentions(body: string) {
         {part}
       </mark>
     ) : (
-      part
+      <Fragment key={index}>{renderLinks(part)}</Fragment>
     ),
   );
 }
@@ -225,9 +226,9 @@ export function TableView({
   };
 
   const copyInvite = async (): Promise<void> => {
-    const target = snapshot?.code
-      ? `${location.origin}${location.pathname}#/join/${snapshot.code}`
-      : `${location.origin}${location.pathname}#/table/${tableId}`;
+    const target = absoluteUrl(
+      snapshot?.code ? `#/join/${snapshot.code}` : `#/table/${tableId}`,
+    );
     if (await copyText(target)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
@@ -251,6 +252,10 @@ export function TableView({
   const canJoin = !snapshot.you.isPlayer && snapshot.status === 'lobby';
   const message = actionError ?? error ?? clientError;
   const notice = snapshot.notice && snapshot.notice.version !== ackedVersion ? snapshot.notice : null;
+  /** 能叫的人：最近一起玩过的、又不在这一桌的（一个都不剩就别留个空标题） */
+  const callable = recentPlayers
+    .filter((person) => !snapshot.players.some((player) => player.id === person.id))
+    .slice(0, 6);
 
   return (
     <div className="table-page">
@@ -367,29 +372,23 @@ export function TableView({
                   : '链接发给朋友，他们在同一个地址打开就能加入。'}
               </div>
 
-              {recentPlayers.length > 0 ? (
+              {callable.length > 0 ? (
                 <div className="invite-box">
                   <div className="muted small">叫个人来（最近一起玩过的）：</div>
                   <div className="invite-list">
-                    {recentPlayers
-                      .filter(
-                        (person) =>
-                          !snapshot.players.some((player) => player.id === person.id),
-                      )
-                      .slice(0, 6)
-                      .map((person) => (
-                        <button
-                          key={person.id}
-                          className="chip"
-                          disabled={busy === `invite:${person.id}` || invited[person.id]}
-                          onClick={() => void invite(person.id)}
-                          title={`@${person.account}`}
-                        >
-                          <Avatar user={person} size={18} />
-                          {person.name}
-                          {invited[person.id] ? ' ✓' : ''}
-                        </button>
-                      ))}
+                    {callable.map((person) => (
+                      <button
+                        key={person.id}
+                        className="chip"
+                        disabled={busy === `invite:${person.id}` || invited[person.id]}
+                        onClick={() => void invite(person.id)}
+                        title={`@${person.account}`}
+                      >
+                        <Avatar user={person} size={18} />
+                        {person.name}
+                        {invited[person.id] ? ' ✓' : ''}
+                      </button>
+                    ))}
                   </div>
                 </div>
               ) : null}

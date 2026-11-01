@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, loadSession, saveSession, setAuthToken, setUnauthorizedHandler, type Session } from './api';
 import { Lobby } from './views/Lobby';
 import { Admin } from './views/Admin';
@@ -121,25 +121,65 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  // 邀请链接 #/join/ABC234：拿到码就直接进桌（开打了就是观战）
-  const joinOnce = useRef(false);
-  useEffect(() => {
-    const match = /^#\/join\/([A-Za-z0-9]{4,8})$/.exec(location.hash);
-    if (!match?.[1] || !session || joinOnce.current) return;
-
-    joinOnce.current = true;
-    const code = match[1];
-    api
-      .joinByCode(code)
-      .then(({ id }) => navigate({ name: 'table', id }))
-      .catch(() => navigate({ name: 'lobby' }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
-
   const navigate = (next: View): void => {
     writeHash(next);
     setView(next);
   };
+
+  /*
+   * 邀请链接 #/join/ABC234：拿到码就直接进桌（开打了就是观战）。
+   *
+   * 原来的写法只跑在 [session] 上，有两个洞：
+   *   ① 没登录时点链接——登录成功后 hash 已被改回大厅，码就丢了；
+   *   ② 在页面内点链接（私聊卡片、聊天里的 #/join/xxx）——session 没变，
+   *      同一个 effect 根本不会重跑。
+   * 所以码先记在 pendingJoin 里，登录后再补一次，另外挂 hashchange 监听。
+   */
+  const joinOnce = useRef<string | null>(null);
+  const pendingJoin = useRef<string | null>(null);
+
+  const readJoinCode = (): string | null => {
+    const match = /^#\/join\/([A-Za-z0-9]{4,8})$/.exec(location.hash);
+    return match?.[1] ? match[1].toUpperCase() : null;
+  };
+
+  const joinByCode = useCallback(async (code: string): Promise<void> => {
+    const target = code.toUpperCase();
+    if (joinOnce.current === target) return;
+    joinOnce.current = target;
+    try {
+      const { id } = await api.joinByCode(target);
+      navigate({ name: 'table', id });
+    } catch (error) {
+      // 房间没了 / 你已经在别的即时房里……说清楚，别默默回大厅
+      joinOnce.current = null;
+      setNotice((error as Error).message);
+      navigate({ name: 'lobby' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 登录前点进来的邀请先记着，登录后接着进
+  useEffect(() => {
+    const code = readJoinCode();
+    if (code) pendingJoin.current = code;
+    if (!session) return;
+    const pending = pendingJoin.current;
+    if (!pending) return;
+    pendingJoin.current = null;
+    void joinByCode(pending);
+  }, [session, joinByCode]);
+
+  // 页面里点邀请链接（私聊卡片、聊天里的 #/join/xxx）
+  useEffect(() => {
+    const onHashChange = (): void => {
+      if (!session) return;
+      const code = readJoinCode();
+      if (code) void joinByCode(code);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [session, joinByCode]);
 
   // 手敲 #/admin 也进不去：后端本来就拦，前端也别把页面画出来
   useEffect(() => {
@@ -239,6 +279,8 @@ export function App() {
   return (
     <Lobby
       session={session}
+      notice={notice}
+      onDismissNotice={() => setNotice(null)}
       onOpen={(id) => navigate({ name: 'table', id })}
       onReplay={(id) => navigate({ name: 'replay', id })}
       onAdmin={() => navigate({ name: 'admin' })}

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
 import { createDb, migrate } from '../apps/server/src/db/index.ts';
+import { buildInvite } from '../apps/server/src/invite.ts';
 import { PgStore, displayName } from '../apps/server/src/store.ts';
 
 /* ------------------------------ 准备 ------------------------------ */
@@ -179,6 +180,60 @@ test('私聊：未读、已读、会话列表都对得上', async () => {
     ['在吗', '开一桌？'],
     '按时间正序',
   );
+});
+
+test('邀请私聊带一条能直接点开的链接，正文不再塞裸地址', async () => {
+  const host = await store.createUser('invite_host', '房主', 'h');
+  const guest = await store.createUser('invite_guest', '客人', 'h');
+  assert.ok(host && guest);
+
+  const payload = buildInvite({
+    inviterName: displayName(host),
+    gameId: 'the-gang',
+    gameName: '纸牌帮',
+    tableId: 'table-1',
+    code: 'abc234',
+  });
+  assert.equal(payload.link, '#/join/abc234', '有房间号就按房间号进');
+  assert.equal(payload.invite.code, 'abc234');
+  assert.ok(!payload.body.includes('#/'), '正文里不该再出现裸的 hash 地址');
+
+  const saved = await store.saveDirectMessage(host.id, guest.id, payload.body, 1000, {
+    kind: payload.kind,
+    link: payload.link,
+    invite: payload.invite,
+  });
+  assert.equal(saved.kind, 'invite');
+
+  const [loaded] = await store.listDirectMessages(guest.id, host.id, 10);
+  assert.equal(loaded?.kind, 'invite');
+  assert.equal(loaded?.link, '#/join/abc234');
+  assert.equal(loaded?.invite?.tableId, 'table-1');
+  assert.equal(loaded?.invite?.gameName, '纸牌帮');
+
+  // 会话列表里的"最后一条"也要带着卡片信息，不能只剩正文
+  const threads = await store.listDirectThreads(guest.id);
+  const thread = threads.find((row) => row.user.id === host.id);
+  assert.equal(thread?.last?.kind, 'invite');
+  assert.equal(thread?.last?.link, '#/join/abc234');
+
+  // 没有房间号的老桌就按桌 id 进；普通消息仍然是 text
+  const fallback = buildInvite({
+    inviterName: '房主',
+    gameId: 'the-gang',
+    gameName: '纸牌帮',
+    tableId: 'table-2',
+    code: null,
+  });
+  assert.equal(fallback.link, '#/table/table-2');
+  assert.equal(fallback.invite.code, null);
+
+  await store.saveDirectMessage(host.id, guest.id, '纯文字', 2000);
+  const conversation = await store.listDirectMessages(host.id, guest.id, 10);
+  const plain = conversation.find((message) => message.body === '纯文字');
+  assert.equal(plain?.kind, 'text');
+  assert.equal(plain?.link, null);
+  assert.equal(plain?.invite, null);
 });
 
 test('新粉丝计数只看「上次看过消息」之后', async () => {

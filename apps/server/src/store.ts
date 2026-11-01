@@ -242,6 +242,7 @@ export interface Store {
     to: string,
     body: string,
     now: number,
+    extra?: DirectMessageExtra,
   ): Promise<DirectMessageRecord>;
   listDirectMessages(me: string, peer: string, limit: number): Promise<DirectMessageRecord[]>;
   /** 把对方发给我的消息标记成已读 */
@@ -375,6 +376,14 @@ export interface FollowRow {
   at: number;
 }
 
+/** 邀请消息里那张桌 */
+export interface DirectInviteRecord {
+  tableId: string;
+  code: string | null;
+  gameId: string;
+  gameName: string;
+}
+
 export interface DirectMessageRecord {
   id: string;
   from: string;
@@ -382,6 +391,64 @@ export interface DirectMessageRecord {
   body: string;
   at: number;
   readAt: number | null;
+  kind: 'text' | 'invite';
+  link: string | null;
+  invite: DirectInviteRecord | null;
+}
+
+/** 发消息时顺带带上的东西：邀请才有 */
+export interface DirectMessageExtra {
+  kind?: 'text' | 'invite';
+  link?: string | null;
+  invite?: DirectInviteRecord | null;
+}
+
+interface DirectMessageRow {
+  id: string;
+  sender_id: string;
+  recipient_id: string;
+  body: string;
+  created_at: number;
+  read_at: number | null;
+  kind?: string | null;
+  link?: string | null;
+  meta?: unknown;
+}
+
+/** jsonb 列在 PGlite 里已经是对象，在别的驱动上可能是字符串，两种都认 */
+function inviteOf(meta: unknown): DirectInviteRecord | null {
+  if (!meta) return null;
+  let value: unknown = meta;
+  if (typeof meta === 'string') {
+    try {
+      value = JSON.parse(meta);
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<DirectInviteRecord>;
+  if (typeof raw.tableId !== 'string' || typeof raw.gameId !== 'string') return null;
+  return {
+    tableId: raw.tableId,
+    code: typeof raw.code === 'string' ? raw.code : null,
+    gameId: raw.gameId,
+    gameName: typeof raw.gameName === 'string' ? raw.gameName : raw.gameId,
+  };
+}
+
+function directMessageOf(row: DirectMessageRow): DirectMessageRecord {
+  return {
+    id: row.id,
+    from: row.sender_id,
+    to: row.recipient_id,
+    body: row.body,
+    at: Number(row.created_at),
+    readAt: row.read_at === null ? null : Number(row.read_at),
+    kind: row.kind === 'invite' ? 'invite' : 'text',
+    link: row.link ?? null,
+    invite: inviteOf(row.meta),
+  };
 }
 
 export interface DirectThreadRecord {
@@ -1592,14 +1659,18 @@ export class PgStore implements Store {
     to: string,
     body: string,
     now: number,
+    extra: DirectMessageExtra = {},
   ): Promise<DirectMessageRecord> {
     const id = randomUUID();
+    const kind = extra.kind ?? 'text';
+    const link = extra.link ?? null;
+    const invite = extra.invite ?? null;
     await this.db.execute(
-      `INSERT INTO direct_messages (id, sender_id, recipient_id, body, created_at)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [id, from, to, body, now],
+      `INSERT INTO direct_messages (id, sender_id, recipient_id, body, created_at, kind, link, meta)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, from, to, body, now, kind, link, invite ? JSON.stringify(invite) : null],
     );
-    return { id, from, to, body, at: now, readAt: null };
+    return { id, from, to, body, at: now, readAt: null, kind, link, invite };
   }
 
   async listDirectMessages(
@@ -1607,29 +1678,15 @@ export class PgStore implements Store {
     peer: string,
     limit: number,
   ): Promise<DirectMessageRecord[]> {
-    const rows = await this.db.query<{
-      id: string;
-      sender_id: string;
-      recipient_id: string;
-      body: string;
-      created_at: number;
-      read_at: number | null;
-    }>(
-      `SELECT id, sender_id, recipient_id, body, created_at, read_at
+    const rows = await this.db.query<DirectMessageRow>(
+      `SELECT id, sender_id, recipient_id, body, created_at, read_at, kind, link, meta
          FROM direct_messages
         WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)
         ORDER BY created_at DESC
         LIMIT $3`,
       [me, peer, limit],
     );
-    return rows.reverse().map((row) => ({
-      id: row.id,
-      from: row.sender_id,
-      to: row.recipient_id,
-      body: row.body,
-      at: Number(row.created_at),
-      readAt: row.read_at === null ? null : Number(row.read_at),
-    }));
+    return rows.reverse().map(directMessageOf);
   }
 
   async markThreadRead(me: string, peer: string): Promise<number> {
@@ -1654,6 +1711,9 @@ export class PgStore implements Store {
       body: string | null;
       created_at: number | null;
       read_at: number | null;
+      kind: string | null;
+      link: string | null;
+      meta: unknown;
       unread: number;
     }>(
       `WITH pairs AS (
@@ -1665,11 +1725,12 @@ export class PgStore implements Store {
        )
        SELECT p.peer, u.name, u.account, u.avatar,
               m.id, m.sender_id, m.recipient_id, m.body, m.created_at, m.read_at,
+              m.kind, m.link, m.meta,
               COALESCE(unread.n, 0)::int AS unread
          FROM pairs p
          JOIN users u ON u.id = p.peer
          LEFT JOIN LATERAL (
-           SELECT id, sender_id, recipient_id, body, created_at, read_at
+           SELECT id, sender_id, recipient_id, body, created_at, read_at, kind, link, meta
              FROM direct_messages
             WHERE (sender_id = $1 AND recipient_id = p.peer)
                OR (sender_id = p.peer AND recipient_id = $1)
@@ -1687,14 +1748,17 @@ export class PgStore implements Store {
     return rows.map((row) => ({
       user: { id: row.peer, account: row.account, name: row.name, avatar: row.avatar ?? null },
       last: row.id
-        ? {
+        ? directMessageOf({
             id: row.id,
-            from: row.sender_id!,
-            to: row.recipient_id!,
+            sender_id: row.sender_id!,
+            recipient_id: row.recipient_id!,
             body: row.body!,
-            at: Number(row.created_at),
-            readAt: row.read_at === null ? null : Number(row.read_at),
-          }
+            created_at: Number(row.created_at),
+            read_at: row.read_at,
+            kind: row.kind,
+            link: row.link,
+            meta: row.meta,
+          })
         : null,
       unread: Number(row.unread ?? 0),
     }));

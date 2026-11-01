@@ -9,6 +9,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { z, ZodError } from 'zod';
 import { AuthError, bearerFrom, signToken, verifyToken } from './auth.js';
+import { buildInvite } from './invite.js';
 import { checkPasswordInput, generatePassword, hashPassword, verifyPassword } from './password.js';
 import { EventBus } from './bus.js';
 import { createDb, migrate, type Db } from './db/index.js';
@@ -1061,15 +1062,25 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
 
     const gameName = host.activeFor(table.gameId)?.manifest.name ?? table.gameId;
-    const body = `${me.name} 叫你来打「${gameName}」${table.code ? `，房间号 ${table.code}` : ''}：#/join/${table.code ?? ''}`;
-    const message = await store.saveDirectMessage(me.id, peer.id, body, Date.now());
+    const payload = buildInvite({
+      inviterName: me.name,
+      gameId: table.gameId,
+      gameName,
+      tableId: table.id,
+      code: table.code,
+    });
+    const message = await store.saveDirectMessage(me.id, peer.id, payload.body, Date.now(), {
+      kind: payload.kind,
+      link: payload.link,
+      invite: payload.invite,
+    });
     bus.publish(`user:${peer.id}`, { t: 'dm', message });
 
     const notification = await store.addNotification(peer.id, {
       kind: 'system',
       title: `${me.name} 邀请你打「${gameName}」`,
       body: table.code ? `房间号 ${table.code}` : null,
-      link: table.code ? `#/join/${table.code}` : `#/table/${table.id}`,
+      link: payload.link,
     });
     await pushNotification(peer.id, notification);
 

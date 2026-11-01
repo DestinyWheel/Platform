@@ -19,6 +19,8 @@ const STATUS_LABEL: Record<string, string> = {
 
 export function Lobby({
   session,
+  notice,
+  onDismissNotice,
   onOpen,
   onReplay,
   onLogout,
@@ -31,6 +33,9 @@ export function Lobby({
   onMessage,
 }: {
   session: Session;
+  /** 从别处带过来的一句话（比如邀请链接没进得去），大厅里说清楚 */
+  notice?: string | null;
+  onDismissNotice?: () => void;
   onOpen: (tableId: string) => void;
   onReplay: (tableId: string) => void;
   onLogout: () => void;
@@ -243,6 +248,15 @@ export function Lobby({
       </header>
 
       {error ? <div className="error">{error}</div> : null}
+
+      {notice ? (
+        <div className="lobby-notice">
+          <span>{notice}</span>
+          <button className="ghost small" onClick={onDismissNotice}>
+            知道了
+          </button>
+        </div>
+      ) : null}
 
       {busyRoom ? (
         <div className="busy-room">
