@@ -8,6 +8,9 @@
  */
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import {
   RuleError,
@@ -21,8 +24,10 @@ import { checkPasswordInput, hashPassword, verifyPassword } from '../apps/server
 import { signToken, verifyToken } from '../apps/server/src/auth.ts';
 import { INVITE_CODE_LENGTH, ROOM_CODE_LENGTH, randomCode } from '../apps/server/src/codes.ts';
 import { hashState } from '../apps/server/src/hash.ts';
+import { readManifest } from '../apps/server/src/pluginHost/publish.ts';
 import dice from '../games/dice/src/server.ts';
 import mandala from '../games/mandala/src/server.ts';
+import theGang from '../games/the-gang/src/server.ts';
 
 const SETUP = {
   players: ['p1', 'p2'],
@@ -354,5 +359,42 @@ test('曼荼罗：抽过牌的动作不能撤销', () => {
     '打高山抽了牌，撤销栈必须清空',
   );
   assert.equal(play('discard', { cards: [0] }).length, 0, '弃牌抽了牌，撤销栈必须清空');
+});
+
+/* ------------------------------ manifest ------------------------------ */
+
+const BASE_MANIFEST = {
+  id: 'coop-demo',
+  name: '合作演示',
+  version: '0.1.0',
+  apiVersion: '^1.0.0',
+  players: { min: 2, max: 4 },
+  modes: ['realtime'],
+  tags: [],
+  estimatedMinutes: 10,
+};
+
+async function manifestFrom(json: unknown): Promise<ReturnType<typeof readManifest>> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'manifest-'));
+  try {
+    await writeFile(path.join(dir, 'manifest.json'), JSON.stringify(json), 'utf8');
+    return await readManifest(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('manifest：elo 字段过得去校验，不写就是计分', async () => {
+  // 发布流水线跑的是 zod 校验后的对象，字段没进 schema 会被**静默丢掉**
+  // ——options 就这么丢过一次，别再来一遍
+  assert.equal((await manifestFrom({ ...BASE_MANIFEST, elo: false })).elo, false);
+  assert.equal((await manifestFrom(BASE_MANIFEST)).elo, undefined, '没写就是不写，由调用方当 true');
+  await assert.rejects(() => manifestFrom({ ...BASE_MANIFEST, elo: 'no' }), 'elo 只能是布尔');
+});
+
+test('manifest：纸牌帮关掉 Elo，曼荼罗和骰子照常计分', () => {
+  assert.equal(theGang.manifest.elo, false, '合作游戏没有「谁赢」');
+  assert.notEqual(mandala.manifest.elo, false);
+  assert.notEqual(dice.manifest.elo, false);
 });
 

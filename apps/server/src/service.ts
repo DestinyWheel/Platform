@@ -875,6 +875,9 @@ export class TableService {
     const finishedAt = table.finishedAt ?? Date.now();
     await this.store.saveMatchResults(table.id, table.gameId, rows, finishedAt);
 
+    // 插件声明这个游戏不计 Elo（合作游戏）：战绩照记，分数一分不动
+    if (!this.eloEnabled(table.gameId, table.gameVersion)) return;
+
     // 默认计分；房主把 options.ranked 设成 false 就是休闲局
     if (table.options.ranked === false) return;
 
@@ -901,7 +904,22 @@ export class TableService {
     );
   }
 
+  /**
+   * 这个游戏要不要算 Elo（manifest 里的 `elo`，没写就是算）。
+   *
+   * 优先看这张桌锁的那个版本：老桌可能跑在还没声明 `elo` 的版本上，
+   * 不该因为插件刚发了新版就悄悄改变结算规则。
+   */
+  private eloEnabled(gameId: string, version?: string): boolean {
+    const manifest =
+      (version ? this.host.get(gameId, version)?.manifest : undefined) ??
+      this.host.activeFor(gameId)?.manifest;
+    return manifest?.elo !== false;
+  }
+
   async leaderboard(gameId: string, limit = 20) {
+    // 不计 Elo 的游戏不进排行榜。库里万一还留着老数据也一并挡掉
+    if (!this.eloEnabled(gameId)) return [];
     return this.store.listRatings(gameId, limit);
   }
 

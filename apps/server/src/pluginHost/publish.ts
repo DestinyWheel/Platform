@@ -54,6 +54,8 @@ const manifestSchema = z
       .optional(),
     /** 牌桌界面偏好 */
     ui: z.object({ hideLog: z.boolean().optional() }).optional(),
+    /** 要不要 Elo / 排行榜；合作游戏写 false，平台就不给它算分、也不摆排行榜 */
+    elo: z.boolean().optional(),
   })
   .refine((manifest) => manifest.players.max >= manifest.players.min, {
     message: 'players.max 不能小于 players.min',

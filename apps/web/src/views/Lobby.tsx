@@ -71,9 +71,17 @@ export function Lobby({
       .catch(() => undefined);
   }, []);
 
-  const effectiveGame = boardGame || games[0]?.id || '';
+  /** 只有计 Elo 的游戏摆排行榜：合作游戏（manifest 里 `elo: false`）不该出现在这儿 */
+  const rankedGames = games.filter((game) => game.elo !== false);
+
+  const effectiveGame = rankedGames.some((game) => game.id === boardGame)
+    ? boardGame
+    : rankedGames[0]?.id ?? '';
   useEffect(() => {
-    if (!effectiveGame) return;
+    if (!effectiveGame) {
+      setBoard([]);
+      return;
+    }
     api
       .leaderboard(effectiveGame)
       .then((data) => setBoard(data.entries))
@@ -278,53 +286,55 @@ export function Lobby({
           ) : null}
         </section>
 
-        <section>
-          <h2>排行榜（Elo）</h2>
-          {games.length > 1 ? (
-            <select
-              className="ghost"
-              value={effectiveGame}
-              onChange={(event) => setBoardGame(event.target.value)}
-            >
-              {games.map((game) => (
-                <option key={game.id} value={game.id}>
-                  {game.name}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          {board.length === 0 ? (
-            <div className="muted">这个游戏还没有排名。</div>
-          ) : (
-            <table className="stats-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>玩家</th>
-                  <th>分数</th>
-                  <th>场次</th>
-                </tr>
-              </thead>
-              <tbody>
-                {board.map((entry, index) => (
-                  <tr
-                    key={entry.userId}
-                    className={entry.userId === session.user.id ? 'me' : ''}
-                  >
-                    <td>{index + 1}</td>
-                    <td>{entry.name}</td>
-                    <td>{entry.rating}</td>
-                    <td>{entry.games}</td>
-                  </tr>
+        {rankedGames.length > 0 ? (
+          <section>
+            <h2>排行榜（Elo）</h2>
+            {rankedGames.length > 1 ? (
+              <select
+                className="ghost"
+                value={effectiveGame}
+                onChange={(event) => setBoardGame(event.target.value)}
+              >
+                {rankedGames.map((game) => (
+                  <option key={game.id} value={game.id}>
+                    {game.name}
+                  </option>
                 ))}
-              </tbody>
-            </table>
-          )}
-        </section>
+              </select>
+            ) : null}
+            {board.length === 0 ? (
+              <div className="muted">这个游戏还没有排名。</div>
+            ) : (
+              <table className="stats-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>玩家</th>
+                    <th>分数</th>
+                    <th>场次</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {board.map((entry, index) => (
+                    <tr
+                      key={entry.userId}
+                      className={entry.userId === session.user.id ? 'me' : ''}
+                    >
+                      <td>{index + 1}</td>
+                      <td>{entry.name}</td>
+                      <td>{entry.rating}</td>
+                      <td>{entry.games}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        ) : null}
       </div>
 
       <footer className="footer">
-        <span>桌游平台 · 游戏以插件形式加载，加游戏不用重启</span>
+        <span>桌游平台 · 游戏以插件形式加载</span>
         <button className="link" onClick={onDocs}>
           插件开发文档
         </button>

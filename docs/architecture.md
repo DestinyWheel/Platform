@@ -183,6 +183,8 @@ export interface GameManifest {
   description?: string;          // 一句话简介，大厅卡片上显示
   intro?: string;                // 详情页介绍：空行分段、'## ' 小标题、'- ' 条目
   notes?: string[];              // 更新公告，新版本第一次进桌强制读一次
+  elo?: boolean;                 // 要不要 Elo/排行榜，默认 true；合作游戏写 false
+  ui?: { hideLog?: boolean };    // 牌桌界面偏好：这个游戏的日志没用就别占一列
 }
 ```
 

@@ -309,9 +309,14 @@ export function GameDetail({
   }, []);
 
   const game = games?.find((item) => item.id === gameId) ?? null;
+  /** 计 Elo 的游戏才有排行榜；合作游戏在 manifest 里写了 `elo: false` */
+  const ranked = game !== null && game.elo !== false;
 
   useEffect(() => {
-    if (!game) return;
+    if (!game || game.elo === false) {
+      setBoard([]);
+      return;
+    }
     let cancelled = false;
     api
       .leaderboard(game.id)
@@ -356,6 +361,7 @@ export function GameDetail({
               </span>
               <span>约 {game.estimatedMinutes} 分钟</span>
               <span>{game.modes.map((mode) => MODE_LABEL[mode] ?? mode).join(' / ')}</span>
+              {ranked ? null : <span>不计 Elo</span>}
               <div className="tags">
                 {game.tags.map((tag) => (
                   <span key={tag} className="tag">
@@ -366,16 +372,18 @@ export function GameDetail({
             </div>
           </div>
 
-          <div className="admin-tabs detail-tabs">
-            <button className={tab === 'intro' ? 'active' : ''} onClick={() => setTab('intro')}>
-              介绍
-            </button>
-            <button className={tab === 'board' ? 'active' : ''} onClick={() => setTab('board')}>
-              排行榜
-            </button>
-          </div>
+          {ranked ? (
+            <div className="admin-tabs detail-tabs">
+              <button className={tab === 'intro' ? 'active' : ''} onClick={() => setTab('intro')}>
+                介绍
+              </button>
+              <button className={tab === 'board' ? 'active' : ''} onClick={() => setTab('board')}>
+                排行榜
+              </button>
+            </div>
+          ) : null}
 
-          {tab === 'intro' ? (
+          {!ranked || tab === 'intro' ? (
             <section>
               {game.intro ? (
                 <div className="intro">{renderIntro(game.intro)}</div>
