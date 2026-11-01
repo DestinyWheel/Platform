@@ -65,32 +65,34 @@ export function ProfileEdit({
         </div>
       </div>
 
-      <label className="field">
-        <span>昵称</span>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          maxLength={20}
-          placeholder="别人看到的名字，可以重名"
-        />
-      </label>
+      <div className="form-stack">
+        <label className="field">
+          <span>昵称</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            maxLength={20}
+            placeholder="别人看到的名字，可以重名"
+          />
+        </label>
 
-      <label className="field">
-        <span>一句话签名（选填）</span>
-        <input
-          value={signature}
-          onChange={(event) => setSignature(event.target.value)}
-          maxLength={60}
-          placeholder="比如：只玩合作游戏"
-        />
-      </label>
+        <label className="field">
+          <span>一句话签名（选填）</span>
+          <input
+            value={signature}
+            onChange={(event) => setSignature(event.target.value)}
+            maxLength={60}
+            placeholder="比如：只玩合作游戏"
+          />
+        </label>
 
-      {error ? <div className="error">{error}</div> : null}
-      {notice ? <div className="notice">{notice}</div> : null}
+        {error ? <div className="error">{error}</div> : null}
+        {notice ? <div className="notice">{notice}</div> : null}
 
-      <button className="primary" disabled={busy || !name.trim()} onClick={() => void save()}>
-        {busy ? '保存中…' : '保存资料'}
-      </button>
+        <button className="primary" disabled={busy || !name.trim()} onClick={() => void save()}>
+          {busy ? '保存中…' : '保存资料'}
+        </button>
+      </div>
     </section>
   );
 }

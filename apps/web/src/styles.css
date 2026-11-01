@@ -1170,6 +1170,22 @@ select.ghost {
   color: var(--text);
 }
 
+/*
+ * 一列排开的表单：字段之间、字段和按钮之间留缝。
+ * 登录卡片自己就是 gap:14 的纵向 flex，所以这里做成显式的容器，
+ * 谁需要就包一层，不去动全局 `.field`（否则登录页会变成 28px）。
+ */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.form-stack > button {
+  align-self: flex-start;
+}
+
 .check {
   display: flex;
   align-items: center;
@@ -1843,6 +1859,8 @@ button.danger-text {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* 标题/搜索框这一行和下面的卡片之间要留缝，否则卡片顶着搜索框 */
+  margin-bottom: 14px;
 }
 
 .game-search {
