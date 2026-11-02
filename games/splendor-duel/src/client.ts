@@ -36,6 +36,20 @@ const ABILITY_ICON: Record<string, string> = {
   steal: '✋',
   copyColor: '🎨',
 };
+const ABILITY_LABEL: Record<string, string> = {
+  replay: '再来一回合',
+  privilege: '拿特权',
+  gem: '拿同色宝石',
+  steal: '偷对手宝石',
+  copyColor: '复制奖励色',
+};
+const ABILITY_HINT: Record<string, string> = {
+  replay: '本回合结束后立刻再进行一个回合',
+  privilege: '从特权池拿 1 张；没有就从对手拿',
+  gem: '从版图拿 1 个与卡牌颜色相同的宝石',
+  steal: '从对手手里拿 1 个非金宝石',
+  copyColor: '叠在已有奖励色的卡上，复制那个颜色',
+};
 const ROYAL_ICON: Record<string, string> = {
   steal: '✋',
   privilege: '📜',
@@ -82,7 +96,7 @@ const CSS = `
 .sd-side { display: flex; flex-direction: column; gap: 10px; }
 .sd-box { border: 1px solid #262d38; border-radius: 12px; background: rgba(22,27,34,.7); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .sd-box-title { font-size: 12px; color: #8b98a7; }
-.sd-card { width: 62px; height: 88px; border-radius: 8px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
+.sd-card { box-sizing: border-box; width: 66px; height: 92px; border-radius: 8px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
 .sd-card.compact { width: 42px; height: 58px; padding: 3px; border-width: 1px; }
 .sd-card.lvl1 { border-color: #5f8f5a; }
 .sd-card.lvl2 { border-color: #b28a3a; }
@@ -90,17 +104,20 @@ const CSS = `
 .sd-card.selected { outline: 2px solid #4c8dff; outline-offset: 1px; }
 .sd-card.back { background: repeating-linear-gradient(135deg, #1b2230, #1b2230 5px, #232c3c 5px, #232c3c 10px); border-color: #3a4656; cursor: default; }
 .sd-card.large { width: 110px; height: 156px; padding: 6px; }
-.sd-card-top { display: flex; justify-content: space-between; align-items: flex-start; min-height: 14px; }
+.sd-card-top { display: flex; justify-content: space-between; align-items: flex-start; min-height: 14px; flex: 0 0 auto; }
 .sd-pts { font-weight: 800; font-size: 15px; color: #f5f7fa; }
 .sd-card.compact .sd-pts { font-size: 11px; }
 .sd-crown { color: #f2c94c; font-size: 11px; }
-.sd-bonus { width: 16px; height: 16px; border-radius: 50%; align-self: center; border: 1px solid rgba(255,255,255,.3); }
-.sd-card.compact .sd-bonus { width: 11px; height: 11px; }
-.sd-abilities { display: flex; gap: 2px; justify-content: center; font-size: 11px; min-height: 14px; }
-.sd-card.compact .sd-abilities { font-size: 9px; }
-.sd-cost { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; margin-top: auto; }
-.sd-cost-pip { width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #0e1116; border: 1px solid rgba(0,0,0,.35); }
-.sd-card.compact .sd-cost-pip { width: 11px; height: 11px; font-size: 8px; }
+.sd-bonus { width: 16px; height: 16px; border-radius: 50%; align-self: center; border: 1px solid rgba(255,255,255,.3); flex: 0 0 auto; }
+.sd-card.compact .sd-bonus { width: 9px; height: 9px; }
+.sd-card.compact .sd-card-top { min-height: 10px; }
+.sd-abilities { display: flex; gap: 2px; justify-content: center; font-size: 11px; min-height: 14px; flex: 0 0 auto; }
+.sd-card.compact .sd-abilities { font-size: 9px; min-height: 9px; }
+.sd-cost { display: flex; gap: 1px; flex-wrap: nowrap; justify-content: center; margin-top: auto; flex: 0 0 auto; min-height: 12px; }
+.sd-cost-pip { box-sizing: border-box; width: 12px; height: 12px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: #0e1116; border: 1px solid rgba(0,0,0,.35); flex: 0 0 auto; }
+.sd-card.compact .sd-cost { min-height: 8px; }
+.sd-card.compact .sd-cost-pip { width: 7px; height: 7px; font-size: 6px; border-width: 0; }
+.sd-card.large .sd-cost-pip { width: 14px; height: 14px; font-size: 9px; }
 .sd-royal { width: 58px; height: 76px; border-radius: 8px; border: 2px solid #d9a521; background: linear-gradient(160deg, #4a3a18, #241c0b); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; flex: none; }
 .sd-royal .pts { font-size: 17px; font-weight: 800; color: #f7e6a8; }
 .sd-royal .icon { font-size: 18px; }
@@ -121,6 +138,10 @@ const CSS = `
 .sd-selected { display: flex; gap: 4px; flex-wrap: wrap; }
 .sd-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #2c3745; border-radius: 999px; padding: 3px 8px; font-size: 12px; }
 .sd-wait { color: #8b98a7; font-size: 13px; }
+.sd-legend { display: flex; flex-direction: column; gap: 6px; }
+.sd-legend-item { display: flex; gap: 8px; align-items: flex-start; color: #aab6c4; font-size: 12px; line-height: 1.35; }
+.sd-legend-icon { width: 20px; flex: none; text-align: center; color: #e6edf3; font-size: 14px; }
+.sd-legend-item b { color: #e6edf3; font-weight: 650; }
 `;
 
 interface OwnedView {
@@ -240,7 +261,13 @@ function costPips(cardId: string, compact: boolean): string {
 
 function cardHtml(
   cardId: string,
-  options: { compact?: boolean; large?: boolean; selected?: boolean; copyColor?: GemColor | null } = {},
+  options: {
+    compact?: boolean;
+    large?: boolean;
+    selected?: boolean;
+    copyColor?: GemColor | null;
+    hideCost?: boolean;
+  } = {},
 ): string {
   const card = CARD_BY_ID[cardId];
   if (!card) return '';
@@ -250,7 +277,12 @@ function cardHtml(
     ? TOKEN_HEX[bonus]
     : 'conic-gradient(#e8edf5,#3a7bd5,#2f9e62,#f2c94c,#d64545,#e8edf5)';
   const crowns = card.crowns > 0 ? '👑'.repeat(card.crowns) : '';
-  const abilities = card.abilities.map((ability) => ABILITY_ICON[ability] ?? '').join('');
+  const abilities = card.abilities
+    .map(
+      (ability) =>
+        `<span title="${ABILITY_LABEL[ability] ?? ability}">${ABILITY_ICON[ability] ?? ''}</span>`,
+    )
+    .join('');
   const classes = [
     'sd-card',
     `lvl${card.level}`,
@@ -269,7 +301,7 @@ function cardHtml(
     </div>
     <div class="sd-bonus" style="background:${bonusCss}"></div>
     <div class="sd-abilities">${abilities}</div>
-    <div class="sd-cost">${costPips(cardId, !!options.compact)}</div>
+    ${options.hideCost ? '' : `<div class="sd-cost">${costPips(cardId, !!options.compact)}</div>`}
   </div>`;
 }
 
@@ -294,13 +326,13 @@ function renderPanel(player: PlayerView, isMe: boolean): string {
         `<span class="sd-token-count">${tokenDot(color)}${player.tokens[color]}</span>`,
     )
     .join('');
+  // 已购卡不再需要看价格；把空间留给声望/皇冠/奖励色
   const cards = player.cards.map((owned) =>
-    cardHtml(owned.cardId, { compact: true, copyColor: owned.copyColor }),
+    cardHtml(owned.cardId, { compact: true, hideCost: true, copyColor: owned.copyColor }),
   ).join('');
+  // 预留卡还用得上价格，保持正常尺寸
   const reserved = player.reserved
-    .map((item) =>
-      item.cardId ? cardHtml(item.cardId, { compact: true }) : cardBack(true),
-    )
+    .map((item) => (item.cardId ? cardHtml(item.cardId) : cardBack()))
     .join('');
   const royals = player.royals.map((royalId) => royalHtml(royalId, true)).join('');
   const publicReserve = !isMe
@@ -376,7 +408,7 @@ function renderDetail(data: SdData): string {
             }</button>`,
         )
         .join('')
-    : '<button class="sd-btn" disabled>宝石不够 / 不是你的回合</button>';
+    : `<button class="sd-btn" disabled>${isMyTurn() ? '宝石不够，暂时买不起' : '不是你的回合'}</button>`;
   const reserveCell = legalReserveCell(selectedCard);
   const canReserve = reserveCell != null && data.board.includes('gold');
   const isReservedMine = (playerOf(meId() ?? '')?.reserved ?? []).some(
@@ -387,7 +419,9 @@ function renderDetail(data: SdData): string {
     <div class="sd-detail-info">
       <strong>${card.level} 级 · ${card.prestige} 分${card.crowns ? ` · ${card.crowns} 皇冠` : ''}</strong>
       <span class="sd-muted">奖励：${card.bonusColor ? TOKEN_NAME[card.bonusColor] : '复制'} ×${card.bonusCount}${
-        card.abilities.length ? ` · ${card.abilities.join(' / ')}` : ''
+        card.abilities.length
+          ? ` · ${card.abilities.map((ability) => ABILITY_LABEL[ability] ?? ability).join(' / ')}`
+          : ''
       }</span>
       <div class="sd-modal-row">${buyButtons}</div>
       ${
@@ -397,6 +431,28 @@ function renderDetail(data: SdData): string {
       }
       <button class="sd-btn" data-act="cancel">取消选择</button>
     </div>
+  </div>`;
+}
+
+function renderLegend(): string {
+  const symbols = [
+    { icon: '2', label: '声望分', hint: '卡牌左上角的数字' },
+    { icon: '👑', label: '皇冠', hint: '第 3、6 个皇冠各拿一张 Royal' },
+    { icon: '●', label: '奖励色', hint: '以后买卡少付 1 个该色宝石' },
+    ...Object.keys(ABILITY_LABEL).map((key) => ({
+      icon: ABILITY_ICON[key] ?? '',
+      label: ABILITY_LABEL[key]!,
+      hint: ABILITY_HINT[key]!,
+    })),
+  ];
+  return `<div class="sd-box">
+    <div class="sd-box-title">卡牌图案说明</div>
+    <div class="sd-legend">${symbols
+      .map(
+        (item) =>
+          `<div class="sd-legend-item"><span class="sd-legend-icon">${item.icon}</span><span><b>${item.label}</b> · ${item.hint}</span></div>`,
+      )
+      .join('')}</div>
   </div>`;
 }
 
@@ -616,6 +672,7 @@ function render(): void {
         <div class="sd-box-title">Royal 卡</div>
         <div class="sd-royals">${data.royals.map((royalId) => royalHtml(royalId, true)).join('') || '<span class="sd-muted">已拿完</span>'}</div>
       </div>
+      ${renderLegend()}
     </div>
   </div>`;
 
