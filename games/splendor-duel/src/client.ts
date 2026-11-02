@@ -29,6 +29,16 @@ const TOKEN_HEX: Record<TokenColor, string> = {
   pearl: '#f1e4cf',
   gold: '#e3b341',
 };
+/** 圆点上的文字：深色/饱和底用柔和象牙白，浅色底用柔和深墨，不用纯黑纯白 */
+const TOKEN_TEXT: Record<TokenColor, string> = {
+  white: '#303740',
+  blue: '#f1f6ff',
+  green: '#233229',
+  red: '#fff4ed',
+  black: '#f3f4f6',
+  pearl: '#3a3025',
+  gold: '#3a2c10',
+};
 const ABILITY_ICON: Record<string, string> = {
   replay: '⟳',
   privilege: '📜',
@@ -70,8 +80,7 @@ const CSS = `
 .sd-crowns { color: #f2c94c; font-size: 13px; }
 .sd-tokens { display: flex; gap: 6px; flex-wrap: wrap; }
 .sd-token-count { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #c3ccd8; }
-.sd-dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #0e1116; border: 1px solid rgba(255,255,255,.18); }
-.sd-dot.gold { color: #231a05; }
+.sd-dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #303740; line-height: 1; padding: 0; font-variant-numeric: tabular-nums; border: 1px solid rgba(255,255,255,.18); }
 .sd-cards { display: flex; gap: 6px; flex-wrap: wrap; max-height: 190px; overflow-y: auto; padding-bottom: 2px; }
 .sd-royals { display: flex; gap: 6px; flex-wrap: wrap; }
 .sd-reserved { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -115,7 +124,7 @@ const CSS = `
 .sd-abilities { display: flex; gap: 2px; justify-content: center; font-size: 11px; min-height: 14px; flex: 0 0 auto; }
 .sd-card.compact .sd-abilities { font-size: 9px; min-height: 9px; }
 .sd-cost { display: flex; gap: 1px; flex-wrap: nowrap; justify-content: center; margin-top: auto; flex: 0 0 auto; min-height: 14px; }
-.sd-cost-pip { box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #0e1116; border: 1px solid rgba(255,255,255,.32); box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); flex: 0 0 auto; }
+.sd-cost-pip { box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #303740; line-height: 1; padding: 0; font-variant-numeric: tabular-nums; border: 1px solid rgba(255,255,255,.32); box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); flex: 0 0 auto; }
 .sd-card.compact .sd-cost { min-height: 8px; }
 .sd-card.compact .sd-cost-pip { width: 7px; height: 7px; font-size: 6px; border-width: 0; }
 .sd-card.large .sd-card-top { min-height: 28px; }
@@ -235,15 +244,11 @@ function playerOf(id: string): PlayerView | null {
 }
 
 function tokenDot(token: TokenColor, size = 18): string {
-  return `<span class="sd-dot" style="width:${size}px;height:${size}px;background:${TOKEN_HEX[token]};${
-    token === 'black' ? 'color:#fff;' : ''
-  }">${TOKEN_NAME[token]}</span>`;
+  return `<span class="sd-dot" style="width:${size}px;height:${size}px;background:${TOKEN_HEX[token]};color:${TOKEN_TEXT[token]}">${TOKEN_NAME[token]}</span>`;
 }
 
 function tokenChip(token: TokenColor): string {
-  return `<span class="sd-dot" style="background:${TOKEN_HEX[token]};${
-    token === 'black' ? 'color:#fff;' : ''
-  }">${TOKEN_NAME[token]}</span>`;
+  return `<span class="sd-dot" style="background:${TOKEN_HEX[token]};color:${TOKEN_TEXT[token]}">${TOKEN_NAME[token]}</span>`;
 }
 
 function costPips(cardId: string, compact: boolean): string {
@@ -253,14 +258,12 @@ function costPips(cardId: string, compact: boolean): string {
   for (const color of GEM_COLORS) {
     if (!card.cost[color]) continue;
     parts.push(
-      `<span class="sd-cost-pip" style="background:${TOKEN_HEX[color]};${
-        color === 'black' ? 'color:#fff;' : ''
-      }">${card.cost[color]}</span>`,
+      `<span class="sd-cost-pip" style="background:${TOKEN_HEX[color]};color:${TOKEN_TEXT[color]}">${card.cost[color]}</span>`,
     );
   }
   if (card.cost.pearl) {
     parts.push(
-      `<span class="sd-cost-pip" style="background:${TOKEN_HEX.pearl}">${card.cost.pearl}</span>`,
+      `<span class="sd-cost-pip" style="background:${TOKEN_HEX.pearl};color:${TOKEN_TEXT.pearl}">${card.cost.pearl}</span>`,
     );
   }
   return parts.join('');
