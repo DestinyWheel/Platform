@@ -241,6 +241,11 @@ input:focus {
   font-weight: 650;
 }
 
+/* 房间码 10px、版本号 8px；标题里的 badge 也统一留 8px，别互相贴着 */
+.title .badge {
+  margin-left: 8px;
+}
+
 /*
  * 顶栏里的控件统一高度。
  *
