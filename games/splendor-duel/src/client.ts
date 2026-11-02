@@ -159,6 +159,7 @@ const CSS = `
 .sd-btn.primary { background: linear-gradient(180deg, #4c8dff, #3a72d8); border-color: transparent; font-weight: 650; }
 .sd-btn:disabled { opacity: .4; cursor: default; }
 .sd-hint { border: 1px dashed #2c3745; border-radius: 10px; padding: 7px 9px; color: #aab6c4; font-size: 12px; }
+.sd-hint.warn { border-color: rgba(242,153,74,.55); color: #f0b37e; }
 .sd-modal { position: absolute; inset: 0; background: rgba(6,9,13,.76); display: flex; align-items: center; justify-content: center; z-index: 8; padding: 16px; }
 .sd-modal-card { width: min(520px, 100%); border: 1px solid #3a4656; border-radius: 16px; background: #121821; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .sd-modal h3 { margin: 0; font-size: 16px; }
@@ -217,6 +218,8 @@ let root: HTMLElement | null = null;
 let context: GameClientContext | null = null;
 let snapshot: ClientSnapshot | null = null;
 let selectedCells: number[] = [];
+/** 点不动时给一句人话，而不是静默 return */
+let actionHint: string | null = null;
 let privilegeMode = false;
 let selectedCard: string | null = null;
 let discardSel: TokenColor[] = [];
@@ -483,7 +486,9 @@ function renderBoard(data: SdData): string {
     .map((token, index) => {
       if (!token) return '<div class="sd-cell empty"></div>';
       const picked = selectedCells.includes(index);
-      return `<div class="sd-cell${picked ? ' picked' : ''}${token === 'gold' ? ' gold' : ''}" data-cell="${index}">
+      return `<div class="sd-cell${picked ? ' picked' : ''}${token === 'gold' ? ' gold' : ''}" data-cell="${index}"${
+        token === 'gold' ? ' title="金只能通过“拿金 + 预留”获得"' : ''
+      }>
         <span class="sd-token ${token}"></span>
       </div>`;
     })
@@ -702,6 +707,7 @@ function render(): void {
 
   root.innerHTML = `<div class="sd-root">
     ${top}
+    ${actionHint ? `<div class="sd-hint warn">${actionHint}</div>` : ''}
     ${opponentPanels}
     ${center}
     ${myPanel}
@@ -716,14 +722,49 @@ function onClick(event: Event): void {
   if (target.dataset.cell != null && !target.dataset.act) {
     const cell = Number(target.dataset.cell);
     if (!Number.isFinite(cell)) return;
-    if (privilegeMode) {
-      selectedCells = selectedCells.includes(cell)
-        ? selectedCells.filter((item) => item !== cell)
-        : [...selectedCells, cell].slice(0, 3);
+    const view = snapshot?.view;
+    const data = viewData();
+    if (!view || !data) return;
+    if (view.phase !== 'playing') {
+      actionHint = '当前阶段不能拿宝石';
+      render();
+      return;
+    }
+    if (!isMyTurn()) {
+      actionHint = '还没轮到你';
+      render();
+      return;
+    }
+    if (data.optional.mandatoryDone) {
+      actionHint = '这回合已经行动过了';
+      render();
+      return;
+    }
+    if (data.board[cell] === 'gold') {
+      actionHint = '金只能通过“拿金 + 预留”获得';
+      render();
+      return;
+    }
+
+    actionHint = null;
+    if (selectedCells.includes(cell)) {
+      selectedCells = selectedCells.filter((item) => item !== cell);
+    } else if (selectedCells.length >= 3) {
+      // 以前第 4 张会被 slice(0,3) 悄悄丢掉，看起来像点了没反应
+      selectedCells = [cell];
+      actionHint = '最多选 3 个，已重新开始选择';
     } else {
-      selectedCells = selectedCells.includes(cell)
-        ? selectedCells.filter((item) => item !== cell)
-        : [...selectedCells, cell].slice(0, 3);
+      selectedCells = [...selectedCells, cell];
+    }
+
+    if (!privilegeMode && selectedCells.length > 0 && !legalTake(selectedCells)) {
+      actionHint = '拿宝石只能选横/竖/斜连续相邻的 1–3 个';
+    }
+    if (privilegeMode) {
+      const privileges = playerOf(meId() ?? '')?.privileges ?? 0;
+      if (selectedCells.length > privileges) {
+        actionHint = `你只有 ${privileges} 张特权`;
+      }
     }
     render();
     return;
@@ -741,6 +782,7 @@ function onClick(event: Event): void {
       selectedCard = cardId;
       selectedCells = [];
       privilegeMode = false;
+      actionHint = null;
       render();
     }
     return;
@@ -748,8 +790,13 @@ function onClick(event: Event): void {
 
   const act = target.dataset.act;
   if (!act) return;
+  actionHint = null;
   if (act === 'take') {
-    if (!legalTake(selectedCells)) return;
+    if (!legalTake(selectedCells)) {
+      actionHint = '这组宝石拿不了：要横/竖/斜连续相邻的 1–3 个';
+      render();
+      return;
+    }
     context.send({ type: 'takeTokens', payload: { cells: selectedCells } });
     selectedCells = [];
     selectedCard = null;
@@ -757,7 +804,17 @@ function onClick(event: Event): void {
     privilegeMode = !privilegeMode;
     selectedCells = [];
   } else if (act === 'use-privileges') {
-    if (selectedCells.length === 0) return;
+    const privileges = playerOf(meId() ?? '')?.privileges ?? 0;
+    if (selectedCells.length === 0) {
+      actionHint = '先点版图上的宝石';
+      render();
+      return;
+    }
+    if (selectedCells.length > privileges) {
+      actionHint = `你只有 ${privileges} 张特权`;
+      render();
+      return;
+    }
     context.send({ type: 'usePrivileges', payload: { cells: selectedCells } });
     selectedCells = [];
     privilegeMode = false;
@@ -822,12 +879,20 @@ function mount(next: GameClientContext): void {
 function update(next: ClientSnapshot): void {
   snapshot = next;
   const view = next.view;
+  if (!view) {
+    selectedCells = [];
+    selectedCard = null;
+    privilegeMode = false;
+    discardSel = [];
+    actionHint = null;
+  }
   const phase = view?.phase ?? '';
   const turn = view?.turn ?? '';
   if (phase !== lastPhase || turn !== lastTurn) {
     selectedCells = [];
     privilegeMode = false;
     discardSel = [];
+    actionHint = null;
     if (phase !== 'playing') selectedCard = null;
     lastPhase = phase;
     lastTurn = turn;
@@ -854,6 +919,7 @@ function unmount(): void {
   privilegeMode = false;
   selectedCard = null;
   discardSel = [];
+  actionHint = null;
   lastPhase = '';
   lastTurn = '';
 }
