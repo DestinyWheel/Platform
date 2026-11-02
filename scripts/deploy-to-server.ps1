@@ -35,13 +35,52 @@ Require-Command git
 Require-Command ssh
 Require-Command scp
 
+# 必须用 Windows 自带的 bsdtar；Git Bash 的 GNU tar 会把 D: 当成远程主机
+$tarExe = Join-Path $env:WINDIR 'System32\tar.exe'
+if (-not (Test-Path $tarExe)) {
+  throw '找不到 Windows 自带的 tar.exe（C:\Windows\System32\tar.exe）'
+}
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $repoRoot
+
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stage = Join-Path $env:TEMP "boardgame-stage-$stamp"
+$srcTar = Join-Path $env:TEMP "boardgame-src-$stamp.tar"
 $archive = Join-Path $env:TEMP "boardgame-deploy-$stamp.tgz"
 
 try {
-  Write-Host "==> 打包当前提交（git archive HEAD）" -ForegroundColor Cyan
-  & git archive --format=tar.gz -o $archive HEAD
+  Write-Host "==> 本地构建前端" -ForegroundColor Cyan
+  if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+    & pnpm --filter @platform/web build
+  } elseif (Get-Command corepack -ErrorAction SilentlyContinue) {
+    & corepack pnpm --filter @platform/web build
+  } else {
+    throw '本地既没有 pnpm 也没有 corepack，无法构建前端'
+  }
+  if ($LASTEXITCODE -ne 0) { throw '前端构建失败' }
+
+  $distSource = Join-Path $repoRoot 'apps\web\dist'
+  if (-not (Test-Path (Join-Path $distSource 'index.html'))) {
+    throw '前端构建产物不存在：apps\web\dist\index.html'
+  }
+
+  Write-Host "==> 打包当前提交 + 前端产物" -ForegroundColor Cyan
+  New-Item -ItemType Directory -Path $stage -Force | Out-Null
+  & git -C $repoRoot archive --format=tar -o $srcTar HEAD
   if ($LASTEXITCODE -ne 0) { throw 'git archive 失败' }
+  & $tarExe -xf $srcTar -C $stage
+  if ($LASTEXITCODE -ne 0) { throw '解压源码包失败' }
+
+  $distTarget = Join-Path $stage 'apps\web\dist'
+  New-Item -ItemType Directory -Path $distTarget -Force | Out-Null
+  Copy-Item -Path (Join-Path $distSource '*') -Destination $distTarget -Recurse -Force
+  if (-not (Test-Path (Join-Path $distTarget 'index.html'))) {
+    throw '前端产物复制失败'
+  }
+
+  & $tarExe -czf $archive -C $stage .
+  if ($LASTEXITCODE -ne 0) { throw '生成部署包失败' }
   $sizeKb = [math]::Round((Get-Item $archive).Length / 1KB, 1)
   Write-Host "    包大小：$sizeKb KB"
 
@@ -77,9 +116,15 @@ echo "== 检查远端环境 =="
 [ -f "$ARCHIVE" ] || { echo "找不到上传包：$ARCHIVE"; exit 1; }
 [ -f "$APP/apps/server/src/main.ts" ] || { echo "找不到应用目录：$APP"; exit 1; }
 systemctl cat "$SERVICE" >/dev/null 2>&1 || { echo "找不到 systemd 服务：$SERVICE"; exit 1; }
-if ! command -v pnpm >/dev/null 2>&1 && ! command -v corepack >/dev/null 2>&1; then
-  echo "服务器既没有 pnpm 也没有 corepack"; exit 1
-fi
+
+# 服务的 pnpm 可能不在 root 的非登录 PATH 里；常见位置补一下
+for dir in \
+  /usr/local/bin /usr/bin /bin \
+  /root/.local/share/pnpm /home/boardgame/.local/share/pnpm \
+  /root/.nvm/versions/node/*/bin /home/boardgame/.nvm/versions/node/*/bin; do
+  [ -x "$dir/pnpm" ] && export PATH="$dir:$PATH"
+done
+echo "pnpm：$(command -v pnpm || echo '未找到（将使用上传的前端产物）')"
 
 echo "== 备份当前源码 =="
 mkdir -p "$BACKUP_DIR"
@@ -96,14 +141,28 @@ tar -xzf "$ARCHIVE" -C "$APP"
 chown -R boardgame:boardgame "$APP" 2>/dev/null || chown -R boardgame "$APP"
 
 echo "== 安装依赖并构建前端 =="
+BUILT=0
 if command -v runuser >/dev/null 2>&1 && runuser -u boardgame -- bash -lc 'command -v pnpm >/dev/null 2>&1'; then
-  runuser -u boardgame -- bash -lc "cd '$APP' && pnpm install --frozen-lockfile && pnpm build"
+  if runuser -u boardgame -- bash -lc "cd '$APP' && pnpm install --frozen-lockfile && pnpm build"; then
+    BUILT=1
+  fi
 elif command -v pnpm >/dev/null 2>&1; then
-  (cd "$APP" && pnpm install --frozen-lockfile && pnpm build)
+  if (cd "$APP" && pnpm install --frozen-lockfile && pnpm build); then
+    BUILT=1
+  fi
 elif command -v corepack >/dev/null 2>&1; then
-  (cd "$APP" && corepack pnpm install --frozen-lockfile && corepack pnpm build)
-else
-  echo "找不到可用的 pnpm"; exit 1
+  if (cd "$APP" && corepack pnpm install --frozen-lockfile && corepack pnpm build); then
+    BUILT=1
+  fi
+fi
+
+if [ "$BUILT" -eq 0 ]; then
+  if [ -f "$APP/apps/web/dist/index.html" ]; then
+    echo "未找到可用的 pnpm（或构建失败），使用上传包里的前端产物，跳过 install/build"
+  else
+    echo "无法构建前端，且上传包里没有 apps/web/dist/index.html"
+    exit 1
+  fi
 fi
 chown -R boardgame:boardgame "$APP" 2>/dev/null || chown -R boardgame "$APP"
 
@@ -138,5 +197,7 @@ fi
 
   Write-Host "==> 完成" -ForegroundColor Green
 } finally {
+  if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue }
+  if (Test-Path $srcTar) { Remove-Item $srcTar -Force -ErrorAction SilentlyContinue }
   if (Test-Path $archive) { Remove-Item $archive -Force -ErrorAction SilentlyContinue }
 }
