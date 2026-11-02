@@ -133,6 +133,9 @@ export function Messages({
       .then((data) => {
         setNotifications(data.notifications);
         setUnreadNotices(data.pulse.unreadNotifications);
+        // 从大厅铃铛进来、且有未读提醒时，先落在「提醒」页签：
+        // 否则停在私聊，提醒没被看过，铃铛计数会一直留着。
+        if (!initialPeer && data.pulse.unreadNotifications > 0) setTab('notices');
       })
       .catch(() => undefined);
     void (async () => {
