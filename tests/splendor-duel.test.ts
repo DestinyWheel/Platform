@@ -121,3 +121,23 @@ test('璀璨宝石：预购当回合可见，预购者下一次回合开始翻�
     '预购者自己始终能看到',
   );
 });
+
+test('璀璨宝石：预留时可以选择拿哪一块金', () => {
+  const state = fresh();
+  const goldCells = state.board
+    .map((token, index) => (token === 'gold' ? index : -1))
+    .filter((index) => index >= 0);
+  assert.ok(goldCells.length >= 2, '开局有 3 块金');
+  const keep = goldCells[0]!;
+  const chosen = goldCells[goldCells.length - 1]!;
+
+  const after = applyAction(splendorDuel, state, 'a', {
+    type: 'reserve',
+    payload: { from: 'pyramid', cell: 0, goldCell: chosen },
+  }, 1).state;
+
+  assert.equal(after.board[chosen], null, '选中的金被拿走');
+  assert.equal(after.board[keep], 'gold', '其他金留在原位');
+  assert.equal(after.tokens.a.gold, 1);
+  assert.equal(after.reserved.a.length, 1);
+});

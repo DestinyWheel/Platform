@@ -78,6 +78,7 @@ const CSS = `
 .sd-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sd-score { font-size: 18px; font-weight: 750; }
 .sd-crowns { color: #f2c94c; font-size: 13px; }
+.sd-assets { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
 .sd-asset-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 2px; }
 .sd-asset-table th, .sd-asset-table td { padding: 4px 3px; text-align: center; border-bottom: 1px solid rgba(44,55,69,.65); }
 .sd-asset-table thead th { color: #8b98a7; font-weight: 600; white-space: nowrap; }
@@ -91,6 +92,20 @@ const CSS = `
 .sd-swatch.black { background: #4b5563; }
 .sd-swatch.pearl { background: radial-gradient(circle at 35% 30%, #fffdf5, #e7cfa6 55%, #b99a63); border-color: #b89355; }
 .sd-swatch.gold { background: #e3b341; }
+.sd-swatch.none { background: #3a4656; }
+.sd-bought { display: flex; flex-wrap: wrap; gap: 6px; flex: 0 0 auto; }
+.sd-bought-group { box-sizing: border-box; flex: 0 0 92px; width: 92px; min-width: 0; border: 1px solid #262d38; border-radius: 10px; background: rgba(15,20,27,.55); padding: 6px; }
+.sd-bought-head { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #8b98a7; margin-bottom: 2px; white-space: nowrap; }
+.sd-bought-row { display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center; gap: 2px; padding: 4px 0; border-bottom: 1px solid rgba(44,55,69,.55); font-size: 12px; }
+.sd-bought-row:last-child { border-bottom: 0; }
+.sd-bought-empty { padding: 5px 0; color: #55637a; text-align: center; font-size: 12px; }
+.sd-bought-score { text-align: left; font-weight: 700; color: #e6edf3; }
+.sd-bought-value { text-align: center; color: #aab6c4; font-variant-numeric: tabular-nums; }
+.sd-bought-crowns { text-align: right; color: #f2c94c; font-size: 12px; white-space: nowrap; }
+.sd-reserved-side { flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px; }
+.sd-reserved-head { font-size: 12px; color: #8b98a7; }
+.sd-reserved-cards { display: flex; gap: 5px; }
+.sd-reserved-royals { display: flex; gap: 4px; flex-wrap: wrap; }
 .sd-dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #303740; line-height: 1; padding: 0; font-variant-numeric: tabular-nums; border: 1px solid rgba(255,255,255,.18); }
 .sd-cards { display: flex; gap: 6px; flex-wrap: wrap; max-height: 190px; overflow-y: auto; padding-bottom: 2px; }
 .sd-royals { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -99,12 +114,14 @@ const CSS = `
 @media (max-width: 860px) { .sd-center { grid-template-columns: 1fr; } }
 .sd-pyramid { display: flex; flex-direction: column; gap: 8px; }
 .sd-row { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
-.sd-row-label { width: 32px; color: #8b98a7; font-size: 12px; }
+.sd-row-label { width: 32px; color: #8b98a7; font-size: 12px; flex: none; }
+.sd-row-cards { flex: 1 1 auto; min-width: 0; display: flex; gap: 5px; justify-content: center; flex-wrap: wrap; }
 .sd-board { display: grid; grid-template-columns: repeat(5, 38px); gap: 6px; justify-content: center; padding: 10px; border: 1px solid #262d38; border-radius: 14px; background: radial-gradient(circle at 50% 40%, rgba(58,123,213,.12), rgba(16,20,26,.85)); }
 .sd-cell { width: 38px; height: 38px; border-radius: 50%; border: 1px dashed #2c3745; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .sd-cell.empty { cursor: default; }
 .sd-cell.picked { outline: 2px solid #4c8dff; outline-offset: 2px; }
 .sd-cell.gold { border-style: solid; }
+.sd-cell.gold.pending { outline: 2px solid #e3b341; outline-offset: 2px; box-shadow: 0 0 0 4px rgba(227,179,65,.14); }
 .sd-token { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(0,0,0,.35); box-shadow: inset 0 1px 2px rgba(255,255,255,.35); }
 .sd-token.white { background: #e8edf5; box-shadow: inset 0 1px 2px rgba(255,255,255,.55), 0 0 0 1px rgba(120,140,170,.4); }
 .sd-token.blue { background: #3a7bd5; }
@@ -129,7 +146,15 @@ const CSS = `
 .sd-box-title { font-size: 12px; color: #8b98a7; }
 .sd-card { box-sizing: border-box; width: 72px; height: 100px; border-radius: 9px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
 .sd-card.compact { width: 42px; height: 58px; padding: 3px; border-width: 1px; }
-.sd-card.large { width: 150px; height: 210px; padding: 8px; gap: 5px; border-width: 3px; border-radius: 12px; }
+.sd-card.small { width: 52px; height: 70px; padding: 3px; border-width: 1px; border-radius: 6px; gap: 2px; }
+.sd-card.small .sd-card-top { min-height: 10px; }
+.sd-card.small .sd-pts { font-size: 11px; }
+.sd-card.small .sd-crown { font-size: 9px; }
+.sd-card.small .sd-bonus { width: 10px; height: 10px; }
+.sd-card.small .sd-abilities { font-size: 9px; min-height: 9px; }
+.sd-card.small .sd-cost { min-height: 9px; gap: 1px; }
+.sd-card.small .sd-cost-pip { width: 9px; height: 9px; font-size: 6px; border-width: 1px; }
+.sd-card.large { width: 150px; height: 210px; padding: 8px 8px 11px; gap: 5px; border-width: 3px; border-radius: 12px; }
 .sd-card.lvl1 { border-color: #5f8f5a; }
 .sd-card.lvl2 { border-color: #b28a3a; }
 .sd-card.lvl3 { border-color: #7a6ac0; }
@@ -155,8 +180,8 @@ const CSS = `
 .sd-card.large .sd-crown { font-size: 18px; }
 .sd-card.large .sd-bonus { width: 30px; height: 30px; }
 .sd-card.large .sd-abilities { font-size: 20px; min-height: 24px; gap: 4px; }
-.sd-card.large .sd-cost { min-height: 26px; gap: 2px; }
-.sd-card.large .sd-cost-pip { width: 26px; height: 26px; font-size: 15px; border-width: 2px; }
+.sd-card.large .sd-cost { min-height: 24px; gap: 2px; }
+.sd-card.large .sd-cost-pip { width: 24px; height: 24px; font-size: 14px; border-width: 2px; }
 .sd-royal { width: 58px; height: 76px; border-radius: 8px; border: 2px solid #d9a521; background: linear-gradient(160deg, #4a3a18, #241c0b); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; flex: none; }
 .sd-royal .pts { font-size: 17px; font-weight: 800; color: #f7e6a8; }
 .sd-royal .icon { font-size: 18px; }
@@ -231,6 +256,8 @@ let snapshot: ClientSnapshot | null = null;
 let selectedCells: number[] = [];
 /** 点不动时给一句人话，而不是静默 return */
 let actionHint: string | null = null;
+/** 预留时先选拿哪一块金：位置会影响补牌的螺旋顺序 */
+let pendingReserve: { from: 'pyramid' | 'deck'; cell?: number; level?: '1' | '2' | '3' } | null = null;
 let privilegeMode = false;
 let selectedCard: string | null = null;
 let discardSel: TokenColor[] = [];
@@ -295,6 +322,7 @@ function cardHtml(
   cardId: string,
   options: {
     compact?: boolean;
+    small?: boolean;
     large?: boolean;
     selected?: boolean;
     copyColor?: GemColor | null;
@@ -319,6 +347,7 @@ function cardHtml(
     'sd-card',
     `lvl${card.level}`,
     options.compact ? 'compact' : '',
+    options.small ? 'small' : '',
     options.large ? 'large' : '',
     options.selected ? 'selected' : '',
   ]
@@ -347,8 +376,50 @@ function royalHtml(royalId: string, compact = false): string {
   </div>`;
 }
 
-function cardBack(compact = false): string {
-  return `<div class="sd-card back${compact ? ' compact' : ''}"></div>`;
+function cardBack(options: { compact?: boolean; small?: boolean } = {}): string {
+  return `<div class="sd-card back${options.compact ? ' compact' : ''}${options.small ? ' small' : ''}"></div>`;
+}
+
+function renderBoughtCards(player: PlayerView): string {
+  // 卡牌只可能有这 5 种奖励色；珍珠/黄金不是卡牌颜色
+  const groups: { color: GemColor | null; cards: OwnedView[] }[] = GEM_COLORS.map((color) => ({
+    color,
+    cards: player.cards.filter(
+      (owned) => (owned.copyColor ?? CARD_BY_ID[owned.cardId]?.bonusColor ?? null) === color,
+    ),
+  }));
+  const colorless = player.cards.filter(
+    (owned) => (owned.copyColor ?? CARD_BY_ID[owned.cardId]?.bonusColor ?? null) == null,
+  );
+  if (colorless.length > 0) groups.push({ color: null, cards: colorless });
+
+  return `<div class="sd-bought">${groups
+    .map((group) => {
+      const label = group.color ? TOKEN_NAME[group.color] : '无色';
+      const swatch = group.color
+        ? `<span class="sd-swatch ${group.color}"></span>`
+        : '<span class="sd-swatch none"></span>';
+      const rows =
+        group.cards.length > 0
+          ? group.cards
+              .map((owned) => {
+                const card = CARD_BY_ID[owned.cardId];
+                if (!card) return '';
+                const value = card.bonusCount > 0 ? `×${card.bonusCount}` : '—';
+                return `<div class="sd-bought-row" title="声望 ${card.prestige} · 奖励 ${value} · 皇冠 ${card.crowns}">
+                  <span class="sd-bought-score">${card.prestige}</span>
+                  <span class="sd-bought-value">${value}</span>
+                  <span class="sd-bought-crowns">👑${card.crowns}</span>
+                </div>`;
+              })
+              .join('')
+          : '<div class="sd-bought-empty">—</div>';
+      return `<div class="sd-bought-group">
+        <div class="sd-bought-head">${swatch}${label} · ${group.cards.length}</div>
+        ${rows}
+      </div>`;
+    })
+    .join('')}</div>`;
 }
 
 function renderPanel(player: PlayerView, isMe: boolean): string {
@@ -365,7 +436,7 @@ function renderPanel(player: PlayerView, isMe: boolean): string {
   ).join('');
   const cardRow = TOKEN_COLORS.map(
     (color) =>
-      `<td>${color === 'pearl' || color === 'gold' ? 0 : cardCounts[color]}</td>`,
+      `<td>${color === 'pearl' || color === 'gold' ? '—' : cardCounts[color]}</td>`,
   ).join('');
   const assetTable = `<table class="sd-asset-table">
     <thead><tr><th></th>${header}</tr></thead>
@@ -374,18 +445,23 @@ function renderPanel(player: PlayerView, isMe: boolean): string {
       <tr><th>卡牌</th>${cardRow}</tr>
     </tbody>
   </table>`;
-  // 已购卡不再需要看价格；把空间留给声望/皇冠/奖励色
-  const cards = player.cards.map((owned) =>
-    cardHtml(owned.cardId, { compact: true, hideCost: true, copyColor: owned.copyColor }),
-  ).join('');
-  // 预留卡还用得上价格，保持正常尺寸
   const reserved = player.reserved
-    .map((item) => (item.cardId ? cardHtml(item.cardId) : cardBack()))
+    .map((item) => (item.cardId ? cardHtml(item.cardId, { small: true }) : cardBack({ small: true })))
     .join('');
   const royals = player.royals.map((royalId) => royalHtml(royalId, true)).join('');
   const publicReserve = !isMe
     ? player.reserved.filter((item) => item.public && item.cardId).length
     : 0;
+  const reservedSide =
+    player.reservedCount > 0 || royals
+      ? `<div class="sd-reserved-side">
+          ${player.reservedCount > 0 ? `<div class="sd-reserved-head">预购 ${player.reservedCount}/3${
+            publicReserve ? ` · ${publicReserve} 张可见` : ''
+          }</div>` : ''}
+          ${player.reservedCount > 0 ? `<div class="sd-reserved-cards">${reserved}</div>` : ''}
+          ${royals ? `<div class="sd-reserved-royals">${royals}</div>` : ''}
+        </div>`
+      : '';
   return `<div class="sd-panel${isMe ? ' me' : ''}">
     <div class="sd-panel-head">
       <span class="sd-score">${nameOf(player.id)}${isMe ? '（你）' : ''}</span>
@@ -395,13 +471,9 @@ function renderPanel(player: PlayerView, isMe: boolean): string {
       ${player.sameColorMax >= 10 ? '<span class="sd-badge">同色 ' + player.sameColorMax + '</span>' : ''}
     </div>
     ${assetTable}
-    <div class="sd-cards">${cards || '<span class="sd-muted">还没有珠宝卡</span>'}</div>
-    <div class="sd-reserved">
-      ${royals}
-      ${reserved}
-      ${player.reserved.length === 0 ? '' : `<span class="sd-muted">预留 ${player.reservedCount}${
-        publicReserve ? ` · 其中 ${publicReserve} 张刚预购可见` : ''
-      }</span>`}
+    <div class="sd-assets">
+      ${renderBoughtCards(player)}
+      ${reservedSide}
     </div>
   </div>`;
 }
@@ -509,8 +581,15 @@ function renderBoard(data: SdData): string {
     .map((token, index) => {
       if (!token) return '<div class="sd-cell empty"></div>';
       const picked = selectedCells.includes(index);
-      return `<div class="sd-cell${picked ? ' picked' : ''}${token === 'gold' ? ' gold' : ''}" data-cell="${index}"${
-        token === 'gold' ? ' title="金只能通过“拿金 + 预留”获得"' : ''
+      const goldPending = token === 'gold' && pendingReserve != null;
+      return `<div class="sd-cell${picked ? ' picked' : ''}${token === 'gold' ? ' gold' : ''}${
+        goldPending ? ' pending' : ''
+      }" data-cell="${index}"${
+        goldPending
+          ? ' title="点击拿走这块金（位置会影响之后补牌顺序）"'
+          : token === 'gold'
+            ? ' title="金只能通过“拿金 + 预留”获得"'
+            : ''
       }>
         <span class="sd-token ${token}"></span>
       </div>`;
@@ -534,11 +613,11 @@ function renderPyramid(data: SdData): string {
         .slice(row.from, row.from + row.count)
         .map((cardId) => (cardId ? cardHtml(cardId, { selected: cardId === selectedCard }) : '<div class="sd-card back"></div>'))
         .join('');
-      return `<div class="sd-row"><span class="sd-row-label">${row.label}</span>${cards}</div>`;
+      return `<div class="sd-row"><span class="sd-row-label">${row.label}</span><div class="sd-row-cards">${cards}</div></div>`;
     })
     .join('');
   return `<div class="sd-box">
-    <div class="sd-box-title">金字塔 · 牌堆 ${data.deckCounts['1']} / ${data.deckCounts['2']} / ${data.deckCounts['3']}</div>
+    <div class="sd-box-title">金字塔 · 牌堆 3级 ${data.deckCounts['3']} · 2级 ${data.deckCounts['2']} · 1级 ${data.deckCounts['1']}</div>
     <div class="sd-pyramid">${body}</div>
   </div>`;
 }
@@ -701,7 +780,7 @@ function render(): void {
     <span class="sd-badge">${phaseName[view.phase] ?? view.phase}</span>
     <span class="sd-muted">特权池 ${data.privilegeSupply}</span>
     <span class="sd-muted">袋 ${data.bagCount}</span>
-    <span class="sd-muted">牌堆 ${data.deckCounts['1']}/${data.deckCounts['2']}/${data.deckCounts['3']}</span>
+    <span class="sd-muted">牌堆 3级 ${data.deckCounts['3']} · 2级 ${data.deckCounts['2']} · 1级 ${data.deckCounts['1']}</span>
     ${me ? '' : '<span class="sd-badge">观战 / 回放</span>'}
   </div>`;
 
@@ -763,6 +842,22 @@ function onClick(event: Event): void {
       render();
       return;
     }
+    if (pendingReserve) {
+      if (data.board[cell] === 'gold') {
+        context.send({
+          type: 'reserve',
+          payload: { ...pendingReserve, goldCell: cell },
+        });
+        pendingReserve = null;
+        actionHint = null;
+        selectedCard = null;
+        render();
+        return;
+      }
+      actionHint = '请点一个金色宝石（位置会影响之后补牌顺序）';
+      render();
+      return;
+    }
     if (data.board[cell] === 'gold') {
       actionHint = '金只能通过“拿金 + 预留”获得';
       render();
@@ -805,6 +900,7 @@ function onClick(event: Event): void {
       selectedCard = cardId;
       selectedCells = [];
       privilegeMode = false;
+      pendingReserve = null;
       actionHint = null;
       render();
     }
@@ -814,6 +910,7 @@ function onClick(event: Event): void {
   const act = target.dataset.act;
   if (!act) return;
   actionHint = null;
+  pendingReserve = null;
   if (act === 'take') {
     if (!legalTake(selectedCells)) {
       actionHint = '这组宝石拿不了：要横/竖/斜连续相邻的 1–3 个';
@@ -848,7 +945,10 @@ function onClick(event: Event): void {
   } else if (act === 'reserve-deck') {
     const level = target.dataset.level;
     if (level === '1' || level === '2' || level === '3') {
-      context.send({ type: 'reserve', payload: { from: 'deck', level } });
+      pendingReserve = { from: 'deck', level };
+      selectedCells = [];
+      privilegeMode = false;
+      actionHint = '选择要拿走的金宝石（位置会影响之后补牌顺序）';
     }
   } else if (act === 'buy' && selectedCard) {
     const copy = target.dataset.copy;
@@ -860,8 +960,10 @@ function onClick(event: Event): void {
   } else if (act === 'reserve' && selectedCard) {
     const cell = Number(target.dataset.cell);
     if (!Number.isFinite(cell)) return;
-    context.send({ type: 'reserve', payload: { from: 'pyramid', cell } });
-    selectedCard = null;
+    pendingReserve = { from: 'pyramid', cell };
+    selectedCells = [];
+    privilegeMode = false;
+    actionHint = '选择要拿走的金宝石（位置会影响之后补牌顺序）';
   } else if (act === 'royal') {
     const royalId = target.dataset.royal;
     if (royalId) context.send({ type: 'takeRoyal', payload: { royalId } });
@@ -908,6 +1010,7 @@ function update(next: ClientSnapshot): void {
     privilegeMode = false;
     discardSel = [];
     actionHint = null;
+    pendingReserve = null;
   }
   const phase = view?.phase ?? '';
   const turn = view?.turn ?? '';
@@ -916,6 +1019,7 @@ function update(next: ClientSnapshot): void {
     privilegeMode = false;
     discardSel = [];
     actionHint = null;
+    pendingReserve = null;
     if (phase !== 'playing') selectedCard = null;
     lastPhase = phase;
     lastTurn = turn;
@@ -943,6 +1047,7 @@ function unmount(): void {
   selectedCard = null;
   discardSel = [];
   actionHint = null;
+  pendingReserve = null;
   lastPhase = '';
   lastTurn = '';
 }

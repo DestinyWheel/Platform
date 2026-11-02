@@ -418,12 +418,19 @@ function mandatoryMoves(state: SplendorDuelState, player: PlayerId): AnyAction[]
   }
 
   if (state.board.includes('gold') && (state.reserved[player]?.length ?? 0) < 3) {
-    state.pyramid.forEach((cardId, index) => {
-      if (cardId) moves.push({ type: 'reserve', payload: { from: 'pyramid', cell: index } });
-    });
-    for (const level of ['1', '2', '3'] as const) {
-      if (state.decks[level].length > 0) {
-        moves.push({ type: 'reserve', payload: { from: 'deck', level } });
+    const goldCells = state.board
+      .map((token, index) => (token === 'gold' ? index : -1))
+      .filter((index) => index >= 0);
+    for (const goldCell of goldCells) {
+      state.pyramid.forEach((cardId, index) => {
+        if (cardId) {
+          moves.push({ type: 'reserve', payload: { from: 'pyramid', cell: index, goldCell } });
+        }
+      });
+      for (const level of ['1', '2', '3'] as const) {
+        if (state.decks[level].length > 0) {
+          moves.push({ type: 'reserve', payload: { from: 'deck', level, goldCell } });
+        }
       }
     }
   }
@@ -623,6 +630,7 @@ const reserve: ActionDef<SplendorDuelState> = {
     from: z.enum(['pyramid', 'deck']),
     cell: z.number().int().min(0).max(11).optional(),
     level: z.enum(['1', '2', '3']).optional(),
+    goldCell: z.number().int().min(0).max(24).optional(),
   }),
   validate(state, action, ctx) {
     if (state.mandatoryDone) return { ok: false, reason: '这一回合已经行动过了' };
@@ -631,7 +639,15 @@ const reserve: ActionDef<SplendorDuelState> = {
     if ((state.reserved[ctx.playerId]?.length ?? 0) >= 3) {
       return { ok: false, reason: '最多只能预留 3 张卡' };
     }
-    const payload = action.payload as { from: 'pyramid' | 'deck'; cell?: number; level?: '1' | '2' | '3' };
+    const payload = action.payload as {
+      from: 'pyramid' | 'deck';
+      cell?: number;
+      level?: '1' | '2' | '3';
+      goldCell?: number;
+    };
+    if (payload.goldCell != null && state.board[payload.goldCell] !== 'gold') {
+      return { ok: false, reason: '选中的不是金色宝石' };
+    }
     if (payload.from === 'pyramid') {
       if (payload.cell == null || !state.pyramid[payload.cell]) {
         return { ok: false, reason: '这里没有可以预留的卡' };
@@ -644,9 +660,18 @@ const reserve: ActionDef<SplendorDuelState> = {
     return { ok: true };
   },
   reduce(state, action, ctx) {
-    const payload = action.payload as { from: 'pyramid' | 'deck'; cell?: number; level?: '1' | '2' | '3' };
+    const payload = action.payload as {
+      from: 'pyramid' | 'deck';
+      cell?: number;
+      level?: '1' | '2' | '3';
+      goldCell?: number;
+    };
     state.mandatoryDone = true;
-    const goldCell = state.board.findIndex((token) => token === 'gold');
+    const requestedGold = payload.goldCell;
+    const goldCell =
+      requestedGold != null && state.board[requestedGold] === 'gold'
+        ? requestedGold
+        : state.board.findIndex((token) => token === 'gold');
     if (goldCell >= 0) takeFromBoardToPlayer(state, ctx.playerId, goldCell);
 
     let cardId: string | null = null;
