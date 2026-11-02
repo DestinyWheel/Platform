@@ -87,8 +87,8 @@ const CSS = `
 .sd-center { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(240px, .7fr); gap: 12px; }
 @media (max-width: 860px) { .sd-center { grid-template-columns: 1fr; } }
 .sd-pyramid { display: flex; flex-direction: column; gap: 8px; }
-.sd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.sd-row-label { width: 46px; color: #8b98a7; font-size: 12px; }
+.sd-row { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.sd-row-label { width: 32px; color: #8b98a7; font-size: 12px; }
 .sd-board { display: grid; grid-template-columns: repeat(5, 38px); gap: 6px; justify-content: center; padding: 10px; border: 1px solid #262d38; border-radius: 14px; background: radial-gradient(circle at 50% 40%, rgba(58,123,213,.12), rgba(16,20,26,.85)); }
 .sd-cell { width: 38px; height: 38px; border-radius: 50%; border: 1px dashed #2c3745; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .sd-cell.empty { cursor: default; }
@@ -105,7 +105,7 @@ const CSS = `
 .sd-side { display: flex; flex-direction: column; gap: 10px; }
 .sd-box { border: 1px solid #262d38; border-radius: 12px; background: rgba(22,27,34,.7); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .sd-box-title { font-size: 12px; color: #8b98a7; }
-.sd-card { box-sizing: border-box; width: 74px; height: 100px; border-radius: 9px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
+.sd-card { box-sizing: border-box; width: 72px; height: 100px; border-radius: 9px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
 .sd-card.compact { width: 42px; height: 58px; padding: 3px; border-width: 1px; }
 .sd-card.large { width: 150px; height: 210px; padding: 8px; gap: 5px; border-width: 3px; border-radius: 12px; }
 .sd-card.lvl1 { border-color: #5f8f5a; }
