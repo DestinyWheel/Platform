@@ -168,22 +168,36 @@ chown -R boardgame:boardgame "$APP" 2>/dev/null || chown -R boardgame "$APP"
 
 echo "== 启动服务 =="
 systemctl start "$SERVICE"
-sleep 3
+sleep 2
 systemctl --no-pager --full status "$SERVICE" | head -n 25 || true
 
-echo "== 健康检查 =="
+echo "== 等待服务监听（最多 120 秒）=="
 BASE=""
-if curl -kfsS --max-time 10 https://127.0.0.1/api/health; then
-  BASE="https://127.0.0.1"
-  echo
-elif curl -fsS --max-time 10 http://127.0.0.1:8787/api/health; then
-  BASE="http://127.0.0.1:8787"
-  echo
-else
+for i in $(seq 1 60); do
+  if curl -kfsS --max-time 3 -o /dev/null https://127.0.0.1/api/health 2>/dev/null; then
+    BASE="https://127.0.0.1"
+    break
+  fi
+  if curl -fsS --max-time 3 -o /dev/null http://127.0.0.1:8787/api/health 2>/dev/null; then
+    BASE="http://127.0.0.1:8787"
+    break
+  fi
+  if ! systemctl is-active --quiet "$SERVICE"; then
+    echo "服务进程已退出"
+    break
+  fi
+  sleep 2
+done
+
+if [ -z "$BASE" ]; then
   echo "健康检查失败，最近日志："
-  journalctl -u "$SERVICE" -n 100 --no-pager || true
+  journalctl -u "$SERVICE" -n 120 --no-pager || true
   exit 1
 fi
+
+echo "健康检查通过：$BASE"
+curl -kfsS --max-time 5 "$BASE/api/health" || true
+echo
 
 if [ -n "$BASE" ]; then
   FAILED=0
