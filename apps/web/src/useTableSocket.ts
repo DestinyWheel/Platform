@@ -21,6 +21,10 @@ export function useTableSocket(tableId: string, token: string): TableSocket {
     let disposed = false;
     let retryTimer: number | undefined;
     let attempts = 0;
+    // 换桌（再来一局 / 从别处跳进来）时旧快照必须清掉，
+    // 否则它带着更高的 seq，会把新桌的快照挡在门外。
+    setSnapshot(null);
+    setError(null);
 
     const connect = (): void => {
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -30,11 +34,14 @@ export function useTableSocket(tableId: string, token: string): TableSocket {
       socketRef.current = ws;
 
       ws.onopen = () => {
+        if (disposed) return;
         attempts = 0;
         ws.send(JSON.stringify({ t: 'subscribe', tableId }));
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
+        // 换桌后旧 socket 可能还有排队中的消息，不能让它们覆盖新桌
+        if (disposed) return;
         let msg: ServerMessage;
         try {
           msg = JSON.parse(event.data) as ServerMessage;
@@ -43,7 +50,11 @@ export function useTableSocket(tableId: string, token: string): TableSocket {
         }
 
         if (msg.t === 'snapshot' && msg.snapshot.tableId === tableId) {
-          setSnapshot((prev) => (prev && prev.seq > msg.snapshot.seq ? prev : msg.snapshot));
+          setSnapshot((prev) =>
+            prev && prev.tableId === msg.snapshot.tableId && prev.seq > msg.snapshot.seq
+              ? prev
+              : msg.snapshot,
+          );
           setError(null);
         } else if (msg.t === 'error') {
           setError(msg.message);
