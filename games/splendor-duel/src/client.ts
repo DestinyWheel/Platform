@@ -25,7 +25,7 @@ const TOKEN_HEX: Record<TokenColor, string> = {
   blue: '#3a7bd5',
   green: '#2f9e62',
   red: '#d64545',
-  black: '#252b33',
+  black: '#4b5563',
   pearl: '#f1e4cf',
   gold: '#e3b341',
 };
@@ -90,14 +90,15 @@ const CSS = `
 .sd-token.blue { background: #3a7bd5; }
 .sd-token.green { background: #2f9e62; }
 .sd-token.red { background: #d64545; }
-.sd-token.black { background: #252b33; }
+.sd-token.black { background: #4b5563; }
 .sd-token.pearl { background: radial-gradient(circle at 35% 30%, #fff, #f1e4cf 45%, #c9b89c); }
 .sd-token.gold { background: radial-gradient(circle at 35% 30%, #fff2b8, #e3b341 55%, #9b741c); }
 .sd-side { display: flex; flex-direction: column; gap: 10px; }
 .sd-box { border: 1px solid #262d38; border-radius: 12px; background: rgba(22,27,34,.7); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
 .sd-box-title { font-size: 12px; color: #8b98a7; }
-.sd-card { box-sizing: border-box; width: 66px; height: 92px; border-radius: 8px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
+.sd-card { box-sizing: border-box; width: 74px; height: 100px; border-radius: 9px; border: 2px solid #3a4656; background: linear-gradient(160deg, #202836, #161b22); display: flex; flex-direction: column; align-items: stretch; padding: 4px; gap: 3px; cursor: pointer; position: relative; flex: none; }
 .sd-card.compact { width: 42px; height: 58px; padding: 3px; border-width: 1px; }
+.sd-card.large { width: 150px; height: 210px; padding: 8px; gap: 5px; border-width: 3px; border-radius: 12px; }
 .sd-card.lvl1 { border-color: #5f8f5a; }
 .sd-card.lvl2 { border-color: #b28a3a; }
 .sd-card.lvl3 { border-color: #7a6ac0; }
@@ -113,11 +114,17 @@ const CSS = `
 .sd-card.compact .sd-card-top { min-height: 10px; }
 .sd-abilities { display: flex; gap: 2px; justify-content: center; font-size: 11px; min-height: 14px; flex: 0 0 auto; }
 .sd-card.compact .sd-abilities { font-size: 9px; min-height: 9px; }
-.sd-cost { display: flex; gap: 1px; flex-wrap: nowrap; justify-content: center; margin-top: auto; flex: 0 0 auto; min-height: 12px; }
-.sd-cost-pip { box-sizing: border-box; width: 12px; height: 12px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: #0e1116; border: 1px solid rgba(0,0,0,.35); flex: 0 0 auto; }
+.sd-cost { display: flex; gap: 1px; flex-wrap: nowrap; justify-content: center; margin-top: auto; flex: 0 0 auto; min-height: 14px; }
+.sd-cost-pip { box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #0e1116; border: 1px solid rgba(255,255,255,.32); box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); flex: 0 0 auto; }
 .sd-card.compact .sd-cost { min-height: 8px; }
 .sd-card.compact .sd-cost-pip { width: 7px; height: 7px; font-size: 6px; border-width: 0; }
-.sd-card.large .sd-cost-pip { width: 14px; height: 14px; font-size: 9px; }
+.sd-card.large .sd-card-top { min-height: 28px; }
+.sd-card.large .sd-pts { font-size: 26px; }
+.sd-card.large .sd-crown { font-size: 18px; }
+.sd-card.large .sd-bonus { width: 30px; height: 30px; }
+.sd-card.large .sd-abilities { font-size: 20px; min-height: 24px; gap: 4px; }
+.sd-card.large .sd-cost { min-height: 26px; gap: 2px; }
+.sd-card.large .sd-cost-pip { width: 26px; height: 26px; font-size: 15px; border-width: 2px; }
 .sd-royal { width: 58px; height: 76px; border-radius: 8px; border: 2px solid #d9a521; background: linear-gradient(160deg, #4a3a18, #241c0b); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; cursor: pointer; flex: none; }
 .sd-royal .pts { font-size: 17px; font-weight: 800; color: #f7e6a8; }
 .sd-royal .icon { font-size: 18px; }
