@@ -727,15 +727,49 @@ input:focus {
 }
 
 .detail-meta {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
+  gap: 20px;
   padding-bottom: 16px;
   margin-bottom: 22px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
   color: var(--muted);
+}
+
+.detail-meta .detail-lead {
+  margin: 0;
+}
+
+.detail-meta .meta-row {
+  padding-left: 20px;
+  border-left: 1px solid var(--border);
+}
+
+/* 没有简介时，右侧那条分割线就没有对象可分了 */
+.detail-meta.no-lead {
+  grid-template-columns: 1fr;
+}
+
+.detail-meta.no-lead .meta-row {
+  padding-left: 0;
+  border-left: 0;
+}
+
+@media (max-width: 760px) {
+  .detail-meta {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 12px;
+  }
+
+  .detail-meta .meta-row {
+    padding-left: 0;
+    padding-top: 10px;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
 }
 
 .intro {

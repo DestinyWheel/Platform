@@ -394,7 +394,7 @@ export function GameDetail({
         <p className="muted">{games ? '这个游戏不存在，或者已被管理员禁用。' : '加载中…'}</p>
       ) : (
         <>
-          <div className="detail-meta">
+          <div className={`detail-meta${game.description ? '' : ' no-lead'}`}>
             {game.description ? <p className="detail-lead">{game.description}</p> : null}
             <div className="meta-row">
               <span>
