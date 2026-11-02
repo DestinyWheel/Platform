@@ -275,8 +275,8 @@ export function TableView({
           {snapshot.code ? <span className="room-code">{snapshot.code}</span> : null}
           <span className="badge">{snapshot.mode === 'realtime' ? '即时' : '回合制'}</span>
           {snapshot.friendly ? <span className="badge">友谊赛 · 不计分</span> : null}
+          <span className={`badge ${snapshot.status}`}>{STATUS_LABEL[snapshot.status]}</span>
         </div>
-        <div className={`badge ${snapshot.status}`}>{STATUS_LABEL[snapshot.status]}</div>
         {remainingMs !== null ? (
           <div className={`timer ${remainingMs < 5000 ? 'urgent' : ''}`}>
             ⏱ {Math.ceil(remainingMs / 1000)}s
