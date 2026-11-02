@@ -168,9 +168,12 @@ export async function registerWebSocket(
       metrics.add('ws.connections', -1);
       request.log.info({ userId: user.id, connectionId }, 'ws 连接关闭');
       offUser();
-      for (const tableId of subscriptions.keys()) presence.leave(tableId, connectionId);
+      const closedTables = [...subscriptions.keys()];
+      for (const tableId of closedTables) presence.leave(tableId, connectionId);
       for (const off of subscriptions.values()) off();
       subscriptions.clear();
+      // 人数变了要通知还在看的人；以前只在显式 unsubscribe 时发，关页面/离开不会发
+      for (const tableId of closedTables) bus.publish(tableId);
     });
   });
 }
