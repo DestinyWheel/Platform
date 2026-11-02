@@ -10,7 +10,7 @@
     "dev:web": "pnpm --filter @platform/web dev",
     "build": "pnpm --filter @platform/web build",
     "typecheck": "pnpm -r typecheck",
-    "test": "node --import tsx --test tests/unit.test.ts tests/the-gang.test.ts tests/the-gang-modes.test.ts tests/the-gang-custom.test.ts tests/social.test.ts",
+    "test": "node --import tsx --test tests/unit.test.ts tests/the-gang.test.ts tests/the-gang-modes.test.ts tests/the-gang-custom.test.ts tests/social.test.ts tests/splendor-duel.test.ts tests/azul-duel.test.ts tests/okey-101.test.ts",
     "smoke": "tsx scripts/smoke.mjs",
     "pack:game": "node scripts/pack-game.mjs"
   },

@@ -73,6 +73,9 @@ tests/
 |---|---|
 | 骰子对决 | 示例，用来跑通链路 |
 | 曼荼罗 | 双人卡牌，规则移植自 Lua 实现，含隐藏信息 / 结算子流程。见 [docs/mandala.md](docs/mandala.md) |
+| 璀璨宝石：对决 | 双人卡牌，67 张 Jewel 卡 + 4 张 Royal；预购牌有可见窗口。见 [docs/splendor-duel.md](docs/splendor-duel.md) |
+| 花砖物语：对决 | 双人五轮，工厂抢砖 / 图案行 / 穹顶计分。见 [docs/azul-duel.md](docs/azul-duel.md) |
+| 土耳其麻将 · Okey 101 | 2–4 人 101 Okey，破冰、拆牌重组、多轮累计。见 [docs/okey-101.md](docs/okey-101.md) |
 
 ## 玩起来之后
 

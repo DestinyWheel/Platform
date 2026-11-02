@@ -201,7 +201,11 @@ ctx.emit({ type: 'achievement', player: winner, key: 'first-win' })
 
 ## 怎么提交
 
-把游戏目录打成 zip，发到 **2087355993@qq.com**，或者让管理员在
+本地开发不用打包发邮件：把游戏目录放到 \`games/<id>/\`，重启一次 \`pnpm dev\`，
+服务启动时会自动扫描并发布 \`games/\` 下的所有游戏；改完想原地更新，可以在
+「管理后台 → 插件 → 重新扫描 games/」或调 \`POST /api/admin/plugins/republish\`。
+
+要发到别的机器时，再把游戏目录打成 zip，发到 **2087355993@qq.com**，或者让管理员在
 「管理后台 → 插件 → 上传插件包」直接上传。
 
 上传后平台自动：校验 manifest → 构建 → 冒烟 → 原子改名进 storage → 激活，全程不重启。

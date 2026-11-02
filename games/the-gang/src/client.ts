@@ -82,6 +82,8 @@ interface GangData {
   challengeInfo: CardInfo[];
   specialist: number | null;
   blackoutRounds: number[];
+  /** 本轮被锁定的星数：拿起来就不能换，且拿后自动确认 */
+  lockedStars: number[];
   guess: GuessInfo | null;
   guessOk: boolean | null;
   specialistInfo: { id: number; name: string; text: string } | null;
@@ -319,6 +321,25 @@ const CSS = `
 .gang-chip.o { background: #f2994a; }
 .gang-chip.r { background: #ef5f5f; }
 .gang-chip.on { opacity: 1; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12); }
+/* 锁定筹码：黑底白字，边框颜色告诉你是第几轮 */
+.gang-chip { position: relative; }
+.gang-chip.locked {
+  background: #0b0e13; color: #fff; opacity: 1;
+  border-style: solid; border-width: 2px;
+}
+.gang-chip.locked.w { border-color: #e7ecf3; }
+.gang-chip.locked.y { border-color: #f2c94c; }
+.gang-chip.locked.o { border-color: #f2994a; }
+.gang-chip.locked.r { border-color: #ef5f5f; }
+.gang-chip.locked::after {
+  content: attr(data-round);
+  position: absolute; right: -5px; top: -6px;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: #0b0e13; color: #fff;
+  font-size: 9px; line-height: 13px; font-weight: 700; text-align: center;
+  border: 1px solid currentColor;
+}
+.gang-pick:disabled { opacity: 0.45; cursor: default; }
 .gang-center {
   border: 1px solid #262d38;
   border-radius: 12px;
@@ -440,10 +461,14 @@ function cardHtml(card: string): string {
   return `<span class="gang-card" style="${red ? 'color:#c0392b' : ''}"><b>${rank}</b><i>${suit}</i></span>`;
 }
 
-function chipHtml(roundIndex: number, star: number | null): string {
+function chipHtml(roundIndex: number, star: number | null, lockedStars: number[] = []): string {
   const color = CHIP_CLASS[roundIndex + 1] ?? 'w';
   if (star == null) return `<span class="gang-chip ${color}"></span>`;
-  return `<span class="gang-chip ${color} on">${star}</span>`;
+  const locked = lockedStars.includes(star);
+  const round = roundIndex + 1;
+  return `<span class="gang-chip ${color} on${locked ? ' locked' : ''}" data-round="${round}"${
+    locked ? ` title="第 ${round} 轮锁定筹码：拿了不能换"` : ''
+  }>${star}</span>`;
 }
 
 function dots(filled: number, total: number, kind: string): string {
@@ -533,8 +558,15 @@ function renderTable(data: GangData, view: PublicView): string {
       const isMe = player === data.you;
       const ready = data.ready[player];
       const hasChip = data.chips[player]?.[data.round - 1] != null;
+      const currentRound = data.round - 1;
       const chips = [0, 1, 2, 3]
-        .map((index) => chipHtml(index, data.chips[player]?.[index] ?? null))
+        .map((index) =>
+          chipHtml(
+            index,
+            data.chips[player]?.[index] ?? null,
+            index === currentRound ? data.lockedStars ?? [] : [],
+          ),
+        )
         .join('');
       const stateText = hasChip ? (ready ? '<span class="ready">已确认</span>' : '还没确认') : '在挑筹码';
       return `
@@ -579,6 +611,8 @@ function renderControls(data: GangData, view: PublicView): string {
   const mine = data.chips[data.you]?.[roundIndex] ?? null;
   const ready = data.ready[data.you];
   const total = Object.keys(data.chips).length;
+  const lockedStars = data.lockedStars ?? [];
+  const mineLocked = mine != null && lockedStars.includes(mine);
 
   const holders: Record<number, string> = {};
   for (const [player, stars] of Object.entries(data.chips)) {
@@ -590,18 +624,34 @@ function renderControls(data: GangData, view: PublicView): string {
   for (let star = 1; star <= total; star += 1) {
     const holder = holders[star];
     const heldByOther = holder != null && holder !== data.you;
+    const locked = lockedStars.includes(star);
     picks.push(`
-      <button class="gang-pick${mine === star ? ' held' : ''}" data-act="take" data-star="${star}">
-        <span class="gang-chip ${CHIP_CLASS[roundIndex + 1]} on">${star}</span>
-        ${heldByOther ? `<span class="who">${nameOf(holder)}</span>` : ''}
+      <button class="gang-pick${mine === star ? ' held' : ''}" data-act="take" data-star="${star}"${
+        ready ? ' disabled' : ''
+      }>
+        <span class="gang-chip ${CHIP_CLASS[roundIndex + 1]} on${locked ? ' locked' : ''}" data-round="${
+          roundIndex + 1
+        }"${locked ? ` title="第 ${roundIndex + 1} 轮锁定筹码：拿了不能换"` : ''}>${star}</span>
+        ${
+          locked
+            ? `<span class="who">锁定${heldByOther ? ` · ${nameOf(holder)}` : ''}</span>`
+            : heldByOther
+              ? `<span class="who">${nameOf(holder)}</span>`
+              : ''
+        }
       </button>`);
   }
+
+  const lockedHint =
+    lockedStars.length > 0
+      ? '<span class="gang-muted">锁定筹码：黑底白字，边框颜色 = 轮次；拿了自动确认，不能换</span>'
+      : '';
 
   const confirm =
     mine == null
       ? '<span class="gang-muted">先拿一个筹码</span>'
       : ready
-        ? '<span class="gang-muted">已确认，等其他人</span>'
+        ? `<span class="gang-muted">${mineLocked ? '锁定筹码已自动确认' : '已确认'}，等其他人</span>`
         : '<button class="gang-btn primary" data-act="confirm">确认</button>';
 
   return `
@@ -609,6 +659,7 @@ function renderControls(data: GangData, view: PublicView): string {
       <div class="gang-picks">
         <span class="gang-muted">${ROUND_NAME[data.round - 1]} · 你觉得自己排第几？</span>
         ${picks.join('')}
+        ${lockedHint}
       </div>
       <div class="gang-actions">${confirm}</div>
     </div>`;
@@ -870,6 +921,8 @@ function formatLog(entry: LogEntry): string | null {
       return `${who} 从 ${nameOf(String(args.from))} 手里抢走了 ${args.star} 星`;
     case 'thegang.ready':
       return `${who} 确认了`;
+    case 'thegang.autoReady':
+      return `${who} 拿了锁定的 ${args.star} 星筹码，自动确认了`;
     case 'thegang.round':
       return `进入${ROUND_NAME[Number(args.round) - 1] ?? ''}，公共牌 ${args.community}`;
     case 'thegang.heistWin':

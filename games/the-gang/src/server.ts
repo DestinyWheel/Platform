@@ -289,12 +289,22 @@ function settleRound(state: GangState, ctx: { goTo(phase: string): void }): void
   state.turn = nextActor(state);
 }
 
-/** 这一轮哪些星数被锁死了（噪音感应器 / 通风管道只管前三轮） */
-function lockedStar(state: GangState): number | null {
-  if (state.round > 3) return null;
-  if (state.effects.lockLow) return 1;
-  if (state.effects.lockHigh) return state.players.length;
-  return null;
+/**
+ * 这一轮哪些星数被锁死了（噪音感应器 / 通风管道只管前三轮）。
+ *
+ * 两张挑战卡可以同时生效（自定义/大师叠加），所以返回数组而不是单个星。
+ */
+function lockedStars(state: GangState): number[] {
+  if (state.round > 3) return [];
+  const stars: number[] = [];
+  if (state.effects.lockLow) stars.push(1);
+  if (state.effects.lockHigh) stars.push(state.players.length);
+  return [...new Set(stars)];
+}
+
+/** 某一轮某个星数现在在谁手里 */
+function chipHolder(state: GangState, roundIndex: number, star: number): string | null {
+  return state.players.find((player) => state.chips[player]?.[roundIndex] === star) ?? null;
 }
 
 const takeChip: ActionDef<GangState> = {
@@ -306,15 +316,23 @@ const takeChip: ActionDef<GangState> = {
     if (!state.players.includes(ctx.playerId)) return { ok: false, reason: 'not.in.table' };
 
     const roundIndex = state.round - 1;
-    const locked = lockedStar(state);
+    const locked = lockedStars(state);
     const mine = state.chips[ctx.playerId]?.[roundIndex] ?? null;
 
     // 锁死的筹码：已经在自己手上就不能换掉，在别人手上就不能抢
-    if (locked != null) {
-      if (mine === locked && star !== locked) return { ok: false, reason: 'chip.locked' };
-      const holder = state.players.find((player) => state.chips[player]?.[roundIndex] === locked);
-      if (star === locked && holder != null && holder !== ctx.playerId) {
-        return { ok: false, reason: 'chip.locked' };
+    if (mine != null && locked.includes(mine) && star !== mine) {
+      return {
+        ok: false,
+        reason: `本轮 ${mine} 星筹码是锁定筹码，拿了就不能换。要换只能等下一轮。`,
+      };
+    }
+    if (locked.includes(star)) {
+      const holder = chipHolder(state, roundIndex, star);
+      if (holder != null && holder !== ctx.playerId) {
+        return {
+          ok: false,
+          reason: `本轮 ${star} 星筹码已经被锁定，不能从别人手里抢。换一个吧。`,
+        };
       }
     }
     return { ok: true };
@@ -338,12 +356,21 @@ const takeChip: ActionDef<GangState> = {
     }
 
     state.chips[ctx.playerId]![roundIndex] = star;
-    state.ready[ctx.playerId] = false;
+    // 锁定筹码拿起来就定死，直接算确认，不给再换的机会
+    const autoReady = lockedStars(state).includes(star);
+    state.ready[ctx.playerId] = autoReady;
     ctx.emit({
       type: 'log',
       key: 'thegang.take',
       args: { player: ctx.playerId, star, round: state.round },
     });
+    if (autoReady) {
+      ctx.emit({
+        type: 'log',
+        key: 'thegang.autoReady',
+        args: { player: ctx.playerId, star, round: state.round },
+      });
+    }
 
     settleRound(state, ctx);
   },
@@ -591,10 +618,10 @@ const states: Record<string, StateDef<GangState>> = {
 
       if (state.chips[me]?.[roundIndex] == null) {
         const taken = new Set(state.players.map((player) => state.chips[player]?.[roundIndex]));
-        const locked = lockedStar(state);
+        const locked = new Set(lockedStars(state));
         for (let star = 1; star <= state.players.length; star += 1) {
           if (taken.has(star)) continue;
-          if (locked === star) continue;
+          if (locked.has(star)) continue;
           return { type: 'takeChip', payload: { star } };
         }
         for (let star = 1; star <= state.players.length; star += 1) {
@@ -1059,6 +1086,7 @@ const theGang: GamePlugin<GangState> = {
             }
           : null,
         guessOk: state.guessOk,
+        lockedStars: lockedStars(state),
       },
     };
   },
@@ -1089,11 +1117,23 @@ const theGang: GamePlugin<GangState> = {
 
     if (state.phase !== 'draft') return [];
     const roundIndex = state.round - 1;
+    const mine = state.chips[playerId]?.[roundIndex] ?? null;
+    // 已经确认（包括拿锁定筹码后的自动确认）就不能再选
+    if (state.ready[playerId]) return [];
+    // 手里已经是锁定筹码，不能再换别的
+    const locked = lockedStars(state);
+    if (mine != null && locked.includes(mine)) return [];
+
     const moves: { type: string; payload: unknown }[] = [];
     for (let star = 1; star <= state.players.length; star += 1) {
+      // 锁定筹码在别人手里时，这个选择必然失败，不要给出来
+      if (locked.includes(star)) {
+        const holder = chipHolder(state, roundIndex, star);
+        if (holder != null && holder !== playerId) continue;
+      }
       moves.push({ type: 'takeChip', payload: { star } });
     }
-    if (state.chips[playerId]?.[roundIndex] != null) {
+    if (mine != null) {
       moves.push({ type: 'confirm', payload: {} });
     }
     return moves;

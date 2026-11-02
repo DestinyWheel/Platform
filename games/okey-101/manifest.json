@@ -1,0 +1,30 @@
+{
+  "id": "okey-101",
+  "name": "土耳其麻将 · Okey 101",
+  "version": "0.1.0",
+  "apiVersion": "^1.0.0",
+  "players": { "min": 2, "max": 4 },
+  "modes": ["realtime", "turnbased"],
+  "tags": ["麻将", "牌组", "策略"],
+  "estimatedMinutes": 35,
+  "realtime": { "fast": 40, "normal": 90, "slow": 180 },
+  "description": "土耳其麻将 101 Okey：先破冰凑出 101 分或 5 个对子，再把牌全部打出去，分数最低的人赢。",
+  "intro": "土耳其麻将（101 Okey），2–4 人。\n\n## 破冰\n\n第一次把牌摆到桌上，必须凑出至少 101 分的牌型，或者至少 5 个对子。开牌后路线锁定。\n\n- 牌型：同点数不同花色的 3–4 张，或同花色连续 3 张以上\n- 对子：同色同点数 2 张；对子路线只能打对子\n- 1 只能当最小，12-13-1 不算顺子\n\n## 开牌后\n\n可以往场上牌型加牌，也可以拆开场上牌型和手里刚拿到的牌重新组合；拆完后每个普通牌型仍然要 ≥3 张。\n\n每回合摸一张或吃上家弃牌，然后必须弃一张。吃弃牌必须在本回合用掉；用不了可以放回去改为摸牌。\n\n## 计分\n\n胡牌的人 -101；没开牌的人 +202；开了牌的人按手里剩牌点数。牌堆摸完没人胡则按同样规则结算（没人开牌则本轮不记分）。默认 3 轮，累计分最低的人赢。",
+  "options": [
+    {
+      "key": "rounds",
+      "label": "轮数",
+      "default": "3",
+      "choices": [
+        { "value": "1", "label": "1 轮", "hint": "短局" },
+        { "value": "3", "label": "3 轮", "hint": "标准" },
+        { "value": "5", "label": "5 轮", "hint": "长局" }
+      ]
+    }
+  ],
+  "achievements": [
+    { "id": "first-win", "name": "首胜", "description": "赢得一局 Okey 101", "icon": "🏆", "color": "#5a2f2f" },
+    { "id": "big-open", "name": "大破冰", "description": "用 150 分以上的牌型开牌", "icon": "🔥", "color": "#7a3a1f" },
+    { "id": "pair-master", "name": "对子大师", "description": "用 5 个对子开牌并赢下该轮", "icon": "🃏", "color": "#3a4a7a" }
+  ]
+}

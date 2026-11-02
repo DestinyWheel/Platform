@@ -98,6 +98,15 @@ importers:
         specifier: ^7.0.0
         version: 7.3.7(@types/node@22.20.5)(tsx@4.23.15)
 
+  games/azul-duel:
+    dependencies:
+      '@platform/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   games/dice:
     dependencies:
       '@platform/sdk':
@@ -108,6 +117,24 @@ importers:
         version: 3.25.76
 
   games/mandala:
+    dependencies:
+      '@platform/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  games/okey-101:
+    dependencies:
+      '@platform/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  games/splendor-duel:
     dependencies:
       '@platform/sdk':
         specifier: workspace:*

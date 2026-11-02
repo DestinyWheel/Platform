@@ -129,6 +129,60 @@ test('纸牌帮：挑战卡真的改了规则', () => {
   assert.deepEqual(blackout.blackoutRounds, [1]);
 });
 
+test('纸牌帮：锁定筹码拿后自动确认、不能换、中文报错', () => {
+  const make = () => createInitialState(theGang, { ...SETUP, options: { mode: 'basic' } }).state;
+
+  // 噪音感应器：1 星锁定
+  const low = make();
+  low.challenge = [2];
+  dealHeist(low, () => 0.5);
+  assert.deepEqual((theGang.view(low, 'a').data as { lockedStars: number[] }).lockedStars, [1]);
+  const timeout = theGang.states.draft.onTimeout!(low, {
+    playerId: 'a',
+    players: low.players,
+    now: 1,
+    rng: () => 0.5,
+    emit: () => undefined,
+    goTo: () => undefined,
+    state: low,
+  } as never);
+  assert.notEqual((timeout?.payload as { star: number }).star, 1, '超时不会去拿锁定星');
+
+  const tookLow = applyAction(theGang, low, 'a', { type: 'takeChip', payload: { star: 1 } }, 1).state;
+  assert.equal(tookLow.chips.a![0], 1);
+  assert.equal(tookLow.ready.a, true, '拿锁定筹码后自动确认');
+  assert.deepEqual(theGang.legalMoves!(tookLow, 'a'), [], '已确认后没有可选项');
+  assert.throws(
+    () => applyAction(theGang, tookLow, 'a', { type: 'takeChip', payload: { star: 2 } }, 1),
+    /锁定筹码.*不能换/,
+  );
+  assert.throws(
+    () => applyAction(theGang, tookLow, 'b', { type: 'takeChip', payload: { star: 1 } }, 1),
+    /锁定.*不能从别人手里抢/,
+  );
+
+  // 通风管道：最高星锁定
+  const high = make();
+  high.challenge = [6];
+  dealHeist(high, () => 0.5);
+  assert.deepEqual((theGang.view(high, 'a').data as { lockedStars: number[] }).lockedStars, [3]);
+  const tookHigh = applyAction(theGang, high, 'c', { type: 'takeChip', payload: { star: 3 } }, 1).state;
+  assert.equal(tookHigh.ready.c, true);
+
+  // 两张挑战卡叠加：1 和最高星同时锁
+  const both = make();
+  both.challenge = [2, 6];
+  dealHeist(both, () => 0.5);
+  assert.deepEqual((theGang.view(both, 'a').data as { lockedStars: number[] }).lockedStars, [1, 3]);
+
+  // 第四轮解锁
+  const fourth = make();
+  fourth.challenge = [2, 6];
+  dealHeist(fourth, () => 0.5);
+  fourth.round = 4;
+  assert.deepEqual((theGang.view(fourth, 'a').data as { lockedStars: number[] }).lockedStars, []);
+});
+
 test('纸牌帮：专家卡能真的用', () => {
   const make = () => createInitialState(theGang, { ...SETUP, options: { mode: 'basic' } }).state;
 

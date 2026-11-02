@@ -1,0 +1,29 @@
+{
+  "id": "azul-duel",
+  "name": "花砖物语：对决",
+  "version": "0.1.0",
+  "apiVersion": "^1.0.0",
+  "players": { "min": 2, "max": 2 },
+  "modes": ["realtime", "turnbased"],
+  "tags": ["板块", "策略", "双人"],
+  "estimatedMinutes": 30,
+  "realtime": { "fast": 45, "normal": 90, "slow": 180 },
+  "description": "从工厂抢花砖，把它们排进图案行，再铺到自己的穹顶上；五轮后分数最高的人赢。",
+  "intro": "双人版花砖物语，30 分钟五轮。\n\n## 每回合\n\n四选一：用玩家棋子拿一块穹顶板、拿一个工厂太阳上某色全部砖、拿所有工厂月亮顶部某色砖、或拿一个已翻开的奖励片。\n\n- 拿到的砖必须全部放进同一条图案行；放不下的进破损区\n- 前四轮每轮必须用掉两个玩家棋子；第五轮不用\n- 拿大工厂月亮的人会拿到先手砖，最后扣 2 分\n\n## 阶段 2\n\n每轮把完整的图案行最右边的砖铺到穹顶对应行的同色/万能格，立即按横/竖连通计分。特殊板填满后会自动放特殊砖并得该行分数。\n\n## 计分\n\n五轮后比较分数；入门计分板是完整横线 3 分、完整竖线 7 分、完整对角线 10 分。平局由先手砖持有者获胜。",
+  "options": [
+    {
+      "key": "scoring",
+      "label": "计分板",
+      "default": "beginner",
+      "choices": [
+        { "value": "beginner", "label": "入门", "hint": "横线 3 / 竖线 7 / 对角线 10" },
+        { "value": "full", "label": "完整", "hint": "使用全部 8 个计分目标" }
+      ]
+    }
+  ],
+  "achievements": [
+    { "id": "first-win", "name": "首胜", "description": "在花砖物语：对决里赢下第一局", "icon": "🏆", "color": "#1f3f4a" },
+    { "id": "dome-master", "name": "穹顶大师", "description": "单局拿到 100 分以上", "icon": "🏛️", "color": "#3a4a63" },
+    { "id": "specialist", "name": "特殊砖收藏家", "description": "一局把穹顶上的特殊格全部填满", "icon": "✨", "color": "#4a3a1f" }
+  ]
+}
