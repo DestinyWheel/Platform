@@ -26,7 +26,7 @@ const TOKEN_HEX: Record<TokenColor, string> = {
   green: '#2f9e62',
   red: '#d64545',
   black: '#4b5563',
-  pearl: '#f1e4cf',
+  pearl: '#e7cfa6',
   gold: '#e3b341',
 };
 /** 圆点上的文字：深色/饱和底用柔和象牙白，浅色底用柔和深墨，不用纯黑纯白 */
@@ -95,12 +95,23 @@ const CSS = `
 .sd-cell.picked { outline: 2px solid #4c8dff; outline-offset: 2px; }
 .sd-cell.gold { border-style: solid; }
 .sd-token { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(0,0,0,.35); box-shadow: inset 0 1px 2px rgba(255,255,255,.35); }
-.sd-token.white { background: #e8edf5; }
+.sd-token.white { background: #e8edf5; box-shadow: inset 0 1px 2px rgba(255,255,255,.55), 0 0 0 1px rgba(120,140,170,.4); }
 .sd-token.blue { background: #3a7bd5; }
 .sd-token.green { background: #2f9e62; }
 .sd-token.red { background: #d64545; }
 .sd-token.black { background: #4b5563; }
-.sd-token.pearl { background: radial-gradient(circle at 35% 30%, #fff, #f1e4cf 45%, #c9b89c); }
+/* 珍珠改成暖香槟色 + 星形标记，和冷白色区分开 */
+.sd-token.pearl {
+  background: radial-gradient(circle at 32% 28%, #fffdf5, #e7cfa6 48%, #b99a63);
+  box-shadow: inset 0 1px 2px rgba(255,255,255,.5), 0 0 0 1px rgba(185,154,99,.75);
+  position: relative;
+}
+.sd-token.pearl::after {
+  content: '✦';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: rgba(105,77,34,.55);
+}
 .sd-token.gold { background: radial-gradient(circle at 35% 30%, #fff2b8, #e3b341 55%, #9b741c); }
 .sd-side { display: flex; flex-direction: column; gap: 10px; }
 .sd-box { border: 1px solid #262d38; border-radius: 12px; background: rgba(22,27,34,.7); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -125,6 +136,7 @@ const CSS = `
 .sd-card.compact .sd-abilities { font-size: 9px; min-height: 9px; }
 .sd-cost { display: flex; gap: 1px; flex-wrap: nowrap; justify-content: center; margin-top: auto; flex: 0 0 auto; min-height: 14px; }
 .sd-cost-pip { box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #303740; line-height: 1; padding: 0; font-variant-numeric: tabular-nums; border: 1px solid rgba(255,255,255,.32); box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); flex: 0 0 auto; }
+.sd-cost-pip.pearl { border-color: #b89355; box-shadow: inset 0 0 0 1px rgba(110,80,35,.35); }
 .sd-card.compact .sd-cost { min-height: 8px; }
 .sd-card.compact .sd-cost-pip { width: 7px; height: 7px; font-size: 6px; border-width: 0; }
 .sd-card.large .sd-card-top { min-height: 28px; }
@@ -258,12 +270,12 @@ function costPips(cardId: string, compact: boolean): string {
   for (const color of GEM_COLORS) {
     if (!card.cost[color]) continue;
     parts.push(
-      `<span class="sd-cost-pip" style="background:${TOKEN_HEX[color]};color:${TOKEN_TEXT[color]}">${card.cost[color]}</span>`,
+      `<span class="sd-cost-pip ${color}" style="background:${TOKEN_HEX[color]};color:${TOKEN_TEXT[color]}">${card.cost[color]}</span>`,
     );
   }
   if (card.cost.pearl) {
     parts.push(
-      `<span class="sd-cost-pip" style="background:${TOKEN_HEX.pearl};color:${TOKEN_TEXT.pearl}">${card.cost.pearl}</span>`,
+      `<span class="sd-cost-pip pearl" style="background:${TOKEN_HEX.pearl};color:${TOKEN_TEXT.pearl}">${card.cost.pearl}</span>`,
     );
   }
   return parts.join('');
