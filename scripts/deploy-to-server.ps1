@@ -172,18 +172,36 @@ sleep 3
 systemctl --no-pager --full status "$SERVICE" | head -n 25 || true
 
 echo "== 健康检查 =="
+BASE=""
 if curl -kfsS --max-time 10 https://127.0.0.1/api/health; then
+  BASE="https://127.0.0.1"
   echo
-  echo "部署完成：https://150.158.13.77/"
-  FAILED=0
 elif curl -fsS --max-time 10 http://127.0.0.1:8787/api/health; then
+  BASE="http://127.0.0.1:8787"
   echo
-  echo "部署完成（8787 端口健康）：https://150.158.13.77/"
-  FAILED=0
 else
   echo "健康检查失败，最近日志："
   journalctl -u "$SERVICE" -n 100 --no-pager || true
   exit 1
+fi
+
+if [ -n "$BASE" ]; then
+  FAILED=0
+  echo "== 新游戏发布检查 =="
+  GAMES_JSON="$(curl -kfsS --max-time 10 "$BASE/api/games" || true)"
+  MISSING=""
+  for id in splendor-duel azul-duel okey-101; do
+    if echo "$GAMES_JSON" | grep -q "\"$id\""; then
+      echo "  ✓ $id"
+    else
+      echo "  ⚠ 未看到 $id"
+      MISSING="$MISSING $id"
+    fi
+  done
+  if [ -n "$MISSING" ]; then
+    echo "新游戏没有全部出现；看插件发布日志：journalctl -u $SERVICE -n 120 --no-pager"
+  fi
+  echo "部署完成：https://150.158.13.77/"
 fi
 '@
 
