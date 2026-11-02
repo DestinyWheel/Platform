@@ -78,8 +78,19 @@ const CSS = `
 .sd-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sd-score { font-size: 18px; font-weight: 750; }
 .sd-crowns { color: #f2c94c; font-size: 13px; }
-.sd-tokens { display: flex; gap: 6px; flex-wrap: wrap; }
-.sd-token-count { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #c3ccd8; }
+.sd-asset-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 2px; }
+.sd-asset-table th, .sd-asset-table td { padding: 4px 3px; text-align: center; border-bottom: 1px solid rgba(44,55,69,.65); }
+.sd-asset-table thead th { color: #8b98a7; font-weight: 600; white-space: nowrap; }
+.sd-asset-table tbody th { text-align: left; color: #8b98a7; font-weight: 500; white-space: nowrap; }
+.sd-asset-table td { color: #e6edf3; font-variant-numeric: tabular-nums; }
+.sd-swatch { width: 11px; height: 11px; border-radius: 50%; display: inline-block; margin-right: 3px; vertical-align: -1px; border: 1px solid rgba(255,255,255,.25); }
+.sd-swatch.white { background: #e8edf5; }
+.sd-swatch.blue { background: #3a7bd5; }
+.sd-swatch.green { background: #2f9e62; }
+.sd-swatch.red { background: #d64545; }
+.sd-swatch.black { background: #4b5563; }
+.sd-swatch.pearl { background: radial-gradient(circle at 35% 30%, #fffdf5, #e7cfa6 55%, #b99a63); border-color: #b89355; }
+.sd-swatch.gold { background: #e3b341; }
 .sd-dot { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 800; color: #303740; line-height: 1; padding: 0; font-variant-numeric: tabular-nums; border: 1px solid rgba(255,255,255,.18); }
 .sd-cards { display: flex; gap: 6px; flex-wrap: wrap; max-height: 190px; overflow-y: auto; padding-bottom: 2px; }
 .sd-royals { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -258,12 +269,8 @@ function playerOf(id: string): PlayerView | null {
   return viewData()?.players.find((player) => player.id === id) ?? null;
 }
 
-function tokenDot(token: TokenColor, size = 18): string {
-  return `<span class="sd-dot" style="width:${size}px;height:${size}px;background:${TOKEN_HEX[token]};color:${TOKEN_TEXT[token]}">${TOKEN_NAME[token]}</span>`;
-}
-
 function tokenChip(token: TokenColor): string {
-  return `<span class="sd-dot" style="background:${TOKEN_HEX[token]};color:${TOKEN_TEXT[token]}">${TOKEN_NAME[token]}</span>`;
+  return `<span class="sd-dot" style="background:${TOKEN_HEX[token]}" title="${TOKEN_NAME[token]}"></span>`;
 }
 
 function costPips(cardId: string, compact: boolean): string {
@@ -345,12 +352,28 @@ function cardBack(compact = false): string {
 }
 
 function renderPanel(player: PlayerView, isMe: boolean): string {
-  const tokens = TOKEN_COLORS.filter((color) => (player.tokens?.[color] ?? 0) > 0)
-    .map(
-      (color) =>
-        `<span class="sd-token-count">${tokenDot(color)}${player.tokens[color]}</span>`,
-    )
-    .join('');
+  const cardCounts: Record<GemColor, number> = { white: 0, blue: 0, green: 0, red: 0, black: 0 };
+  for (const owned of player.cards) {
+    const color = owned.copyColor ?? CARD_BY_ID[owned.cardId]?.bonusColor ?? null;
+    if (color) cardCounts[color] += 1;
+  }
+  const header = TOKEN_COLORS.map(
+    (color) => `<th><span class="sd-swatch ${color}"></span>${TOKEN_NAME[color]}</th>`,
+  ).join('');
+  const tokenRow = TOKEN_COLORS.map(
+    (color) => `<td>${player.tokens?.[color] ?? 0}</td>`,
+  ).join('');
+  const cardRow = TOKEN_COLORS.map(
+    (color) =>
+      `<td>${color === 'pearl' || color === 'gold' ? 0 : cardCounts[color]}</td>`,
+  ).join('');
+  const assetTable = `<table class="sd-asset-table">
+    <thead><tr><th></th>${header}</tr></thead>
+    <tbody>
+      <tr><th>宝石</th>${tokenRow}</tr>
+      <tr><th>卡牌</th>${cardRow}</tr>
+    </tbody>
+  </table>`;
   // 已购卡不再需要看价格；把空间留给声望/皇冠/奖励色
   const cards = player.cards.map((owned) =>
     cardHtml(owned.cardId, { compact: true, hideCost: true, copyColor: owned.copyColor }),
@@ -371,7 +394,7 @@ function renderPanel(player: PlayerView, isMe: boolean): string {
       <span class="sd-badge">特权 ${player.privileges}</span>
       ${player.sameColorMax >= 10 ? '<span class="sd-badge">同色 ' + player.sameColorMax + '</span>' : ''}
     </div>
-    <div class="sd-tokens">${tokens || '<span class="sd-muted">还没有宝石</span>'}</div>
+    ${assetTable}
     <div class="sd-cards">${cards || '<span class="sd-muted">还没有珠宝卡</span>'}</div>
     <div class="sd-reserved">
       ${royals}
