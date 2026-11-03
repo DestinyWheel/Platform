@@ -18,16 +18,15 @@ import type {
 } from '@platform/sdk';
 import {
   AZUL_COLORS,
-  BEGINNER_GOALS,
   CHIP_BY_ID,
   CHIPS,
-  FULL_GOALS,
   PLATE_BY_ID,
   PLATES,
   SCORING_GOALS,
   SPECIAL_TILE_COUNT,
   chipMatches,
   rotatedCells,
+  scoringGoalsFor,
   type AzulColor,
   type PlateCell,
   type ScoringGoalId,
@@ -482,20 +481,21 @@ function scoreGoals(state: AzulDuelState, player: PlayerId): { total: number; li
   }
 
   if (state.scoringGoals.includes('corner')) {
-    let count = 0;
-    for (const slot of [0, 2, 6, 8]) {
-      const placed = board.plates[slot];
-      if (!placed) continue;
+    const slotFull = (slot: number): boolean => {
+      if (!board.plates[slot]) return false;
       const slotRow = Math.floor(slot / 3);
       const slotCol = slot % 3;
-      const full = [0, 1, 2, 3].every((local) => {
+      return [0, 1, 2, 3].every((local) => {
         const row = slotRow * 2 + Math.floor(local / 2);
         const col = slotCol * 2 + (local % 2);
         return domeFilled(board, row, col);
       });
-      if (full) count += 1;
-    }
-    add('四角板', count * 3);
+    };
+    let points = 0;
+    // 上排两个角（第 1–2 行）每块 3 分；下排两个角（第 5–6 行）每块 8 分
+    for (const slot of [0, 2]) if (slotFull(slot)) points += 3;
+    for (const slot of [6, 8]) if (slotFull(slot)) points += 8;
+    add('四角板', points);
   }
 
   if (state.scoringGoals.includes('emptySpecial')) {
@@ -1178,7 +1178,7 @@ const azulDuel: GamePlugin<AzulDuelState> = {
       startingPlayer,
       setupPicks: 0,
       boards: zeroed(players, emptyBoard),
-      scoringGoals: options.scoring === 'full' ? [...FULL_GOALS] : [...BEGINNER_GOALS],
+      scoringGoals: scoringGoalsFor(String(options.scoring ?? 'beginner'), rng),
       tilingDone: zeroed(players, () => false),
       lastRound: null,
     };
@@ -1214,6 +1214,9 @@ const azulDuel: GamePlugin<AzulDuelState> = {
         bagCount: state.bag.length,
         towerCount: state.tower.length,
         platePileCount: state.platePile.length,
+        platePileTopKind: state.platePile.length
+          ? (PLATE_BY_ID[state.platePile[state.platePile.length - 1]!]?.kind ?? null)
+          : null,
         plateDisplay: state.plateDisplay,
         specialTiles: state.specialTiles,
         startTile: state.startTile,

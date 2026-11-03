@@ -5,7 +5,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyAction, createInitialState } from '../packages/engine/src/index.ts';
 import azulDuel from '../games/azul-duel/src/server.ts';
-import { CHIPS, PLATES } from '../games/azul-duel/src/plates.ts';
+import {
+  BEGINNER_GOALS,
+  CHIPS,
+  PLATES,
+  SCORING_TABLETS,
+  scoringGoalsFor,
+} from '../games/azul-duel/src/plates.ts';
 
 const SETUP = { players: ['a', 'b'], options: {}, seed: 20261102, now: 1_700_000_000_000 };
 
@@ -35,7 +41,39 @@ test('花砖物语：18 块板、20 个奖励片、5 色平衡', () => {
     halves[chip.a] = (halves[chip.a] ?? 0) + 1;
     halves[chip.b] = (halves[chip.b] ?? 0) + 1;
   }
-  for (const count of Object.values(halves)) assert.equal(count, 8);
+  for (const color of ['navy', 'turquoise', 'yellow', 'red', 'black']) {
+    assert.equal(halves[color], 6, `${color} 半片数量`);
+  }
+  assert.equal(halves.white, 10, '白色半片数量');
+  for (const chip of CHIPS) {
+    if (chip.a === 'red' || chip.b === 'red') {
+      assert.equal(chip.b, 'red', '红色永远在右半块');
+    }
+  }
+});
+
+test('花砖物语：4 张双面计分板与入门/标准选面', () => {
+  assert.equal(SCORING_TABLETS.length, 4);
+  assert.deepEqual(
+    SCORING_TABLETS.map((tablet) => tablet.front),
+    ['row', 'column', 'diagonal', 'joker'],
+  );
+  assert.deepEqual(
+    SCORING_TABLETS.map((tablet) => tablet.back),
+    ['fiveColorRow', 'outer', 'corner', 'emptySpecial'],
+  );
+  assert.deepEqual(BEGINNER_GOALS, ['row', 'column', 'diagonal']);
+
+  assert.deepEqual(
+    scoringGoalsFor('full', () => 0.25),
+    SCORING_TABLETS.map((tablet) => tablet.front),
+    'rng < 0.5 全翻正面',
+  );
+  assert.deepEqual(
+    scoringGoalsFor('full', () => 0.75),
+    SCORING_TABLETS.map((tablet) => tablet.back),
+    'rng >= 0.5 全翻反面',
+  );
 });
 
 test('花砖物语：开局补满工厂、两块板后进入抢砖', () => {
@@ -47,6 +85,15 @@ test('花砖物语：开局补满工厂、两块板后进入抢砖', () => {
   assert.equal(created.specialTiles, 9);
   assert.equal(created.bag.length + 21, 65, '袋 + 工厂 = 65 普通砖');
   assert.equal(created.chipSupply.length, 16, '20 个奖励片，4 个在工厂');
+  const createdView = azulDuel.view(created).data as {
+    platePileCount: number;
+    platePileTopKind: string | null;
+  };
+  assert.ok(createdView.platePileCount > 0);
+  assert.ok(
+    createdView.platePileTopKind === 'joker' || createdView.platePileTopKind === 'special',
+    '板堆顶上要暴露 joker / special 类型',
+  );
 
   const state = setupGame();
   assert.equal(state.phase, 'playing');
@@ -138,10 +185,10 @@ test('花砖物语：特殊板填满 3 个颜色格后自动放特殊砖', () =>
   board.plates = Array.from({ length: 9 }, () => null);
   board.dome = Array.from({ length: 36 }, () => null);
   board.plates[0] = { plateId: 'special-1', rotation: 0 };
-  // special-1：local0 特殊、local1 navy(0,1)、local2 turquoise(1,0)、local3 yellow(1,1)
-  board.dome[1] = 'navy';
-  board.dome[6] = 'turquoise';
-  board.patterns[1] = ['yellow', 'yellow'];
+  // special-1：local0 特殊、local1 黑(0,1)、local2 红(1,0)、local3 深蓝(1,1)
+  board.dome[1] = 'black';
+  board.dome[6] = 'red';
+  board.patterns[1] = ['navy', 'navy'];
   const after = applyAction(azulDuel, state, player, {
     type: 'placeDomeTile',
     payload: { line: 1, row: 1, col: 1 },
