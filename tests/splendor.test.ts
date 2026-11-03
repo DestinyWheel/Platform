@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyAction, createInitialState } from '../packages/engine/src/index.ts';
-import splendor, { type SplendorState } from '../games/splendor/src/server.ts';
+import splendor, { prestigeOf, type SplendorState } from '../games/splendor/src/server.ts';
 import { CARDS, CARD_BY_ID, CITY_TILES, GEMS, NOBLES } from '../games/splendor/src/data.ts';
 import { emptyTokens } from '../games/splendor/src/rules.ts';
 
@@ -368,6 +368,58 @@ test('璀璨宝石：三个模块可以同时开', () => {
   state.data.a.tokens = { ...emptyTokens(), white: 12, blue: 12, green: 12, red: 12, black: 12 };
   const bought = run(state, 'a', { type: 'buy', payload: { cardId: card.id } });
   assert.equal(bought.phase, 'stronghold');
+});
+
+test('璀璨宝石：贸易之路五条能力的条件与效果', () => {
+  // 1) 买卡后拿宝石：3 红 + 1 白
+  const buy = fresh(['a', 'b'], ['trading-posts']);
+  buy.seals.a = ['gem-on-buy'];
+  const card = CARD_BY_ID['L1-08']!;
+  buy.board['1'][0] = card.id;
+  buy.data.a.tokens = { ...emptyTokens(), blue: 4 };
+  const afterBuy = run(buy, 'a', { type: 'buy', payload: { cardId: card.id } });
+  assert.equal(afterBuy.phase, 'buy-gem', '买卡后要拿一颗宝石');
+  const gemTaken = run(afterBuy, 'a', { type: 'chooseBuyGem', payload: { color: 'red' } });
+  assert.equal(gemTaken.data.a.tokens.red, 1);
+
+  // 2) 拿两个同色后额外拿一个异色：2 白
+  const extra = fresh(['a', 'b'], ['trading-posts']);
+  extra.seals.a = ['extra-gem'];
+  const takeTwo = run(extra, 'a', { type: 'take2', payload: { color: 'red' } });
+  assert.equal(takeTwo.phase, 'extra-gem');
+  const extraTaken = run(takeTwo, 'a', { type: 'chooseExtraGem', payload: { color: 'blue' } });
+  assert.equal(extraTaken.data.a.tokens.blue, 1);
+
+  // 3) 黄金当两颗：3 蓝 + 1 黑（已在别的用例覆盖购买，这里确认要求不被误判）
+  const gold = fresh(['a', 'b'], ['trading-posts']);
+  assert.equal(gold.seals.a.length, 0);
+  const noPower = run(gold, 'a', { type: 'take3', payload: { colors: ['white', 'blue', 'red'] } });
+  assert.equal(noPower.seals.a.length, 0, '没有 2 白就拿不到能力');
+
+  // 4) 每个贸易站 1 分：5 绿（不再需要贵族）
+  const five = fresh(['a', 'b'], ['trading-posts']);
+  const greenCards = CARDS.filter((item) => item.bonus === 'green').slice(0, 5).map((item) => item.id);
+  five.data.a.cards = greenCards;
+  const cardPrestige = greenCards.reduce((sum, id) => sum + CARD_BY_ID[id]!.prestige, 0);
+  const afterSeal = run(five, 'a', { type: 'take3', payload: { colors: ['white', 'blue', 'red'] } });
+  assert.ok(afterSeal.seals.a.includes('seal-points'), '五绿就该占下计分能力（不用贵族）');
+  assert.equal(prestigeOf(afterSeal, 'a'), cardPrestige + 1, '一枚纹章 1 分');
+
+  // 5) 牌堆二选一：3 黑
+  const peek = fresh(['a', 'b'], ['trading-posts']);
+  peek.seals.a = ['deck-peek'];
+  const before = peek.decks['1'].length;
+  const peeked = run(peek, 'a', { type: 'reserve', payload: { from: 'deck', level: '1' } });
+  assert.equal(peeked.phase, 'deck-pick', '盲抽要摸两张让玩家挑');
+  assert.equal(peeked.pendingDeck.length, 2);
+  assert.equal(peeked.data.a.tokens.gold, 1, '预留照常拿黄金，且只拿一次');
+
+  const keep = peeked.pendingDeck[0]!;
+  const other = peeked.pendingDeck[1]!;
+  const picked = run(peeked, 'a', { type: 'chooseDeckCard', payload: { cardId: keep } });
+  assert.deepEqual(picked.data.a.reserved, [keep]);
+  assert.equal(picked.decks['1'].length, before - 1, '另一张放回牌堆底，牌堆只少一张');
+  assert.equal(picked.decks['1'][0], other, '没选的那张在牌堆底部');
 });
 
 test('璀璨宝石：任意局面都能走完（随机 300 步）', () => {

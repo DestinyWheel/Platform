@@ -235,9 +235,8 @@ export const STRONGHOLDS_PER_PLAYER = 3;
 export interface TradingPower {
   id: string;
   name: string;
-  /** 要求：红利数量（noble=true 表示还要一个贵族） */
+  /** 要求：红利数量 */
   need: Partial<Record<Gem, number>>;
-  needNobel?: boolean;
   description: string;
 }
 
@@ -261,17 +260,16 @@ export const TRADING_POWERS: TradingPower[] = [
     description: '购买时，每个黄金指示物当作 2 个同色宝石使用。',
   },
   {
-    id: 'five-points',
-    name: '立得 5 分',
+    id: 'seal-points',
+    name: '贸易站计分',
     need: { green: 5 },
-    needNobel: true,
-    description: '立刻获得 5 点声望（只生效一次，可能直接触发终局）。',
+    description: '你在版图上每有 1 枚纹章，就值 1 点声望（含刚放下的这枚，可触发终局）。',
   },
   {
-    id: 'seal-points',
-    name: '纹章计分',
+    id: 'deck-peek',
+    name: '牌堆二选一',
     need: { black: 3 },
-    description: '你在版图上每有 1 枚纹章，就值 1 点声望（可触发终局）。',
+    description: '从牌堆顶盲抽预留时，改为摸两张、挑一张留下，另一张放回牌堆底。',
   },
 ];
 

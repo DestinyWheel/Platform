@@ -91,6 +91,7 @@ interface ViewData {
   pendingNobles: string[];
   pendingPowers: string[];
   pendingCities: string[];
+  pendingDeck: string[];
   endTriggered: boolean;
   players: ViewPlayer[];
   you: string | null;
@@ -175,6 +176,7 @@ const CSS = `
 .sp-power .name { color: #e6edf3; font-weight: 600; font-size: 12px; }
 .sp-power .req { display: flex; gap: 2px; }
 .sp-power .req i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.sp-req-noble { font-size: 10px; color: #e6c06a; }
 .sp-seats { display: flex; gap: 3px; }
 .sp-seat { width: 6px; height: 16px; border-radius: 2px; background: #2c3745; }
 .sp-seat.on { background: #4c8dff; }
@@ -429,7 +431,7 @@ export function createSplendorClient(): GameClient {
           return `<div class="sp-power ${reach ? 'reach' : ''}" ${reach ? `data-act="power" data-power="${power.id}"` : ''} title="${esc(power.description)}">
             <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:0">
               <span class="name">${esc(power.name)}${owners.length ? ` · ${owners.map((player) => esc(names[player.id] ?? player.id)).join('、')}` : ''}</span>
-              <span class="req">${req}${power.needNobel ? '<i style="background:#b28a3a"></i>' : ''}</span>
+              <span class="req">${req}</span>
             </div>
           </div>`;
         }).join('')
@@ -530,6 +532,7 @@ export function createSplendorClient(): GameClient {
       if (view.phase === 'seal') return `<div class="sp-hint warn">满足多条贸易之路能力，点一条占下纹章。</div>`;
       if (view.phase === 'stronghold') return `<div class="sp-hint warn">买完卡必须处理要塞：点一张正面朝上的牌放置/移动，或点对手要塞移除。</div>`;
       if (view.phase === 'conquest') return `<div class="sp-hint warn">三枚要塞压顶，可以立刻买下那张牌。</div>`;
+      if (view.phase === 'deck-pick') return `<div class="sp-hint warn">贸易之路：从摸到的两张里挑一张预留。</div>`;
       if (view.phase === 'buy-gem') return `<div class="sp-hint warn">贸易之路能力：买卡后拿 1 个宝石，点宝石堆。</div>`;
       if (view.phase === 'extra-gem') return `<div class="sp-hint warn">贸易之路能力：拿 2 个同色后额外拿 1 个异色。</div>`;
       if (!active) return `<div class="sp-hint">等 ${esc(turnName ?? '对手')} 行动。</div>`;
@@ -544,6 +547,26 @@ export function createSplendorClient(): GameClient {
           <div class="sp-modal-row">
             ${d.conquestTargets.map((cardId) => `<button class="sp-btn primary" data-act="conquest" data-card="${cardId}">买下 ${esc(CARD_BY_ID[cardId]?.prestige ? `${CARD_BY_ID[cardId]!.prestige} 分卡` : '这张卡')}</button>`).join('')}
             <button class="sp-btn" data-act="skip-conquest">跳过</button>
+          </div>
+        </div></div>`
+      : '';
+
+    const deckPick = view.phase === 'deck-pick' && active && d.pendingDeck.length > 0
+      ? `<div class="sp-modal"><div class="sp-modal-card">
+          <h3>牌堆二选一</h3>
+          <div class="sp-muted">贸易之路：挑一张留下，另一张放回牌堆底。</div>
+          <div class="sp-modal-row">
+            ${d.pendingDeck
+              .map((cardId) => {
+                const card = CARD_BY_ID[cardId];
+                if (!card) return '';
+                return `<div class="sp-card" data-act="deck-card" data-card="${cardId}" style="border-color:${LEVEL_COLOR[String(card.level) as '1' | '2' | '3']}">
+                  <div class="sp-card-top"><span class="sp-pts">${card.prestige || ''}</span><span class="sp-bonus" style="background:${GEM_HEX[card.bonus]}" title="${esc(COLOR_NAME[card.bonus])}"></span></div>
+                  <div class="sp-card-mid"></div>
+                  <div class="sp-cost">${cardCost(card)}</div>
+                </div>`;
+              })
+              .join('')}
           </div>
         </div></div>`
       : '';
@@ -575,6 +598,7 @@ export function createSplendorClient(): GameClient {
       ${hint}
       <div class="sp-players">${players}</div>
       ${conquest}
+      ${deckPick}
     </div>`;
 
     const root = host.querySelector('.sp-root') as HTMLElement | null;
@@ -690,6 +714,12 @@ export function createSplendorClient(): GameClient {
       return;
     }
 
+    if (act === 'deck-card') {
+      const cardId = target.dataset.card;
+      if (cardId) context?.send({ type: 'chooseDeckCard', payload: { cardId } });
+      return;
+    }
+
     if (act === 'conquest') {
       const cardId = target.dataset.card;
       if (cardId) context?.send({ type: 'buyConquest', payload: { cardId } });
@@ -743,6 +773,8 @@ export function createSplendorClient(): GameClient {
           return `${name(args.player)} 用贸易之路额外拿了 1 个${colorName(args.color)}宝石`;
         case 'sp.buyGem':
           return `${name(args.player)} 买卡后拿了 1 个${colorName(args.color)}宝石`;
+        case 'sp.deckPeek':
+          return `${name(args.player)} 用贸易之路摸了两张牌堆顶的牌，二选一`;
         case 'sp.reserve':
           return `${name(args.player)} 预留了一张牌`;
         case 'sp.buy': {

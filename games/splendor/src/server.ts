@@ -101,6 +101,9 @@ export interface SplendorState extends BaseState {
   pendingNobles: string[];
   pendingPowers: string[];
   pendingCities: string[];
+  /** 贸易之路「牌堆二选一」摸到的两张，等玩家挑一张 */
+  pendingDeck: string[];
+  pendingDeckLevel: Level | null;
   /** 本回合的城市检查是否已经做过 */
   cityResolved: boolean;
   /** 繁华之城：场上 3 张城市板块 */
@@ -242,7 +245,6 @@ function qualifyingPowers(state: SplendorState, player: PlayerId): string[] {
   if (owned.length >= SEALS_PER_PLAYER) return [];
   return TRADING_POWERS.filter((power) => {
     if (owned.includes(power.id)) return false;
-    if (power.needNobel && dataOf(state, player).nobles.length === 0) return false;
     return GEMS.every((gem) => (power.need[gem] ?? 0) <= (bonuses[gem] ?? 0));
   }).map((power) => power.id);
 }
@@ -346,7 +348,6 @@ function placeSeal(
   if (!state.seals[player]) state.seals[player] = [];
   if (state.seals[player]!.includes(powerId)) return;
   state.seals[player]!.push(powerId);
-  if (power.id === 'five-points') state.bonusPoints[player] = (state.bonusPoints[player] ?? 0) + 5;
   ctx.emit({
     type: 'log',
     key: 'sp.seal',
@@ -594,6 +595,22 @@ const reserve: ActionDef<SplendorState> = {
   reduce(state, action, ctx) {
     const payload = action.payload as { from: 'board' | 'deck'; level: Level; index?: number };
     const data = dataOf(state, ctx.playerId);
+
+    // 贸易之路「牌堆二选一」：盲抽时摸两张、挑一张，另一张放回牌堆底
+    if (payload.from === 'deck' && hasPower(state, ctx.playerId, 'deck-peek')) {
+      const deck = state.decks[payload.level];
+      if (deck.length >= 2) {
+        const first = deck.pop()!;
+        const second = deck.pop()!;
+        state.pendingDeck = [first, second];
+        state.pendingDeckLevel = payload.level;
+        giveGold(state, ctx.playerId);
+        ctx.emit({ type: 'log', key: 'sp.deckPeek', args: { player: ctx.playerId, level: payload.level } });
+        ctx.goTo('deck-pick');
+        return;
+      }
+    }
+
     let cardId: string | null = null;
     if (payload.from === 'board') {
       cardId = state.board[payload.level][payload.index!] ?? null;
@@ -609,6 +626,28 @@ const reserve: ActionDef<SplendorState> = {
     giveGold(state, ctx.playerId);
     ctx.emit({ type: 'log', key: 'sp.reserve', args: { player: ctx.playerId, card: cardId } });
     refill(state);
+    enterNoble(state, ctx);
+  },
+};
+
+const chooseDeckCard: ActionDef<SplendorState> = {
+  allowedIn: ['deck-pick'],
+  schema: z.object({ cardId: z.string().min(1) }),
+  validate(state, action, ctx) {
+    const { cardId } = action.payload as { cardId: string };
+    if (!state.pendingDeck.includes(cardId)) return { ok: false, reason: '这两张里没有这张牌' };
+    return { ok: true };
+  },
+  reduce(state, action, ctx) {
+    const { cardId } = action.payload as { cardId: string };
+    const level = state.pendingDeckLevel ?? '1';
+    const other = state.pendingDeck.find((id) => id !== cardId);
+    dataOf(state, ctx.playerId).reserved.push(cardId);
+    // 另一张回到牌堆底部（牌堆用 pop() 摸顶，所以底部是 unshift）
+    if (other) state.decks[level].unshift(other);
+    state.pendingDeck = [];
+    state.pendingDeckLevel = null;
+    ctx.emit({ type: 'log', key: 'sp.reserve', args: { player: ctx.playerId, card: cardId } });
     enterNoble(state, ctx);
   },
 };
@@ -669,12 +708,8 @@ const buyConquest: ActionDef<SplendorState> = {
     data.cards.push(cardId);
     state.conquestUsed = true;
     ctx.emit({ type: 'log', key: 'sp.conquestBuy', args: { player: ctx.playerId, card: cardId } });
-    if (has(state, 'strongholds')) {
-      ctx.goTo('stronghold');
-      return;
-    }
-    refill(state);
-    enterNoble(state, ctx);
+    // 抢占也是一次买卡：贸易之路的「买卡后拿宝石」照样触发
+    afterBuy(state, ctx);
   },
 };
 
@@ -851,6 +886,8 @@ const states: Record<string, StateDef<SplendorState>> = {
       state.pendingNobles = [];
       state.pendingPowers = [];
       state.pendingCities = [];
+      state.pendingDeck = [];
+      state.pendingDeckLevel = null;
       state.cityResolved = false;
     },
     onTimeout(state, ctx) {
@@ -863,6 +900,13 @@ const states: Record<string, StateDef<SplendorState>> = {
     onTimeout(state) {
       const key = state.pendingCities[0];
       return key ? { type: 'chooseCity', payload: { key } } : null;
+    },
+  },
+  'deck-pick': {
+    type: 'activePlayer',
+    onTimeout(state) {
+      const cardId = state.pendingDeck[0];
+      return cardId ? { type: 'chooseDeckCard', payload: { cardId } } : null;
     },
   },
   'buy-gem': {
@@ -1138,6 +1182,8 @@ const splendor: GamePlugin<SplendorState> = {
       pendingNobles: [],
       pendingPowers: [],
       pendingCities: [],
+      pendingDeck: [],
+      pendingDeckLevel: null,
       cityResolved: false,
       endReason: null,
     };
@@ -1158,6 +1204,7 @@ const splendor: GamePlugin<SplendorState> = {
     chooseNoble,
     choosePower,
     chooseCity,
+    chooseDeckCard,
     discardToken,
     pass,
   },
@@ -1187,6 +1234,8 @@ const splendor: GamePlugin<SplendorState> = {
         pendingNobles: state.pendingNobles,
         pendingPowers: state.pendingPowers,
         pendingCities: state.pendingCities,
+        // 牌堆二选一摸到的两张只有本人能看到
+        pendingDeck: me && !state.finished && currentPlayer(state) === me ? state.pendingDeck : [],
         endTriggered: state.endTriggered,
         players: state.players.map((player) => playerView(state, player, me)),
         you: me,
@@ -1218,6 +1267,9 @@ const splendor: GamePlugin<SplendorState> = {
     }
     if (state.phase === 'city' && currentPlayer(state) === playerId) {
       return state.pendingCities.map((key) => ({ type: 'chooseCity', payload: { key } }));
+    }
+    if (state.phase === 'deck-pick' && currentPlayer(state) === playerId) {
+      return state.pendingDeck.map((cardId) => ({ type: 'chooseDeckCard', payload: { cardId } }));
     }
     if (state.phase === 'discard' && currentPlayer(state) === playerId) {
       const tokens = dataOf(state, playerId).tokens;
