@@ -76,7 +76,7 @@ export interface CityInstance {
 }
 
 export interface SplendorState extends BaseState {
-  expansion: ExpansionId | null;
+  expansions: ExpansionId[];
   /** 场上的宝石堆（不含已发出的黄金） */
   supply: TokenBag;
   data: Record<PlayerId, PlayerData>;
@@ -110,6 +110,11 @@ export interface SplendorState extends BaseState {
 
 function currentPlayer(state: SplendorState): PlayerId {
   return state.players[state.turn]!;
+}
+
+/** 这一桌开了哪些扩展（可以同时开多个） */
+export function has(state: SplendorState, id: ExpansionId): boolean {
+  return (state.expansions ?? []).includes(id);
 }
 
 function dataOf(state: SplendorState, player: PlayerId): PlayerData {
@@ -231,7 +236,7 @@ function qualifyingNobles(state: SplendorState, player: PlayerId): string[] {
 }
 
 function qualifyingPowers(state: SplendorState, player: PlayerId): string[] {
-  if (state.expansion !== 'trading-posts') return [];
+  if (!has(state, 'trading-posts')) return [];
   const bonuses = bonusesOf(state, player);
   const owned = state.seals[player] ?? [];
   if (owned.length >= SEALS_PER_PLAYER) return [];
@@ -244,7 +249,7 @@ function qualifyingPowers(state: SplendorState, player: PlayerId): string[] {
 
 /** 三枚自己的要塞压在同一张卡上：可以立刻买下它 */
 function conquestTargets(state: SplendorState, player: PlayerId): string[] {
-  if (state.expansion !== 'strongholds') return [];
+  if (!has(state, 'strongholds')) return [];
   return Object.entries(state.strongholds)
     .filter(([, spot]) => spot.owner === player && spot.count >= STRONGHOLDS_PER_PLAYER)
     .map(([cardId]) => cardId)
@@ -257,7 +262,7 @@ function citySideOf(instance: CityInstance): CitySide {
 
 /** 回合结束能拿的城市板块：已经有一张的人不再拿 */
 function qualifyingCities(state: SplendorState, player: PlayerId): CityInstance[] {
-  if (state.expansion !== 'cities') return [];
+  if (!has(state, 'cities')) return [];
   if (state.cities.some((city) => city.owner === player)) return [];
   const bonuses = bonusesOf(state, player);
   const prestige = prestigeOf(state, player);
@@ -362,7 +367,7 @@ function afterBuy(state: SplendorState, ctx: ActionContext<SplendorState>): void
 }
 
 function afterBuyGem(state: SplendorState, ctx: ActionContext<SplendorState>): void {
-  if (state.expansion === 'strongholds') {
+  if (has(state, 'strongholds')) {
     ctx.goTo('stronghold');
     return;
   }
@@ -377,7 +382,7 @@ function afterStronghold(state: SplendorState, ctx: ActionContext<SplendorState>
 
 function afterRefill(state: SplendorState, ctx: ActionContext<SplendorState>): void {
   const player = currentPlayer(state);
-  if (state.expansion === 'strongholds' && !state.conquestUsed) {
+  if (has(state, 'strongholds') && !state.conquestUsed) {
     const targets = conquestTargets(state, player);
     if (targets.length > 0) {
       ctx.goTo('conquest');
@@ -389,7 +394,7 @@ function afterRefill(state: SplendorState, ctx: ActionContext<SplendorState>): v
 
 function finishTurn(state: SplendorState, ctx: ActionContext<SplendorState>): void {
   // 繁华之城：回合结束先看能不能拿城市板块（拿到就直接触发终局）
-  if (state.expansion === 'cities' && !state.cityResolved) {
+  if (has(state, 'cities') && !state.cityResolved) {
     const player = currentPlayer(state);
     const options = qualifyingCities(state, player);
     if (options.length > 1) {
@@ -401,7 +406,7 @@ function finishTurn(state: SplendorState, ctx: ActionContext<SplendorState>): vo
     if (options.length === 1) takeCity(state, ctx, options[0]!.key);
   }
 
-  if (state.expansion !== 'cities') {
+  if (!has(state, 'cities')) {
     const reached = state.players.some((player) => prestigeOf(state, player) >= 15);
     if (reached) state.endTriggered = true;
   }
@@ -429,7 +434,7 @@ function finishGame(state: SplendorState, ctx: ActionContext<SplendorState>): vo
     city: state.cities.some((item) => item.owner === player),
   }));
 
-  if (state.expansion === 'cities') {
+  if (has(state, 'cities')) {
     // 只有一个人拿到城市板块 -> 他赢；多人拿到 -> 其中声望最高的赢
     rows.sort(
       (a, b) => Number(b.city) - Number(a.city) || b.prestige - a.prestige || a.cards - b.cards,
@@ -458,7 +463,7 @@ function finishGame(state: SplendorState, ctx: ActionContext<SplendorState>): vo
   state.ranking = ranking;
   state.finished = true;
   state.phase = 'finished';
-  state.endReason = state.expansion === 'cities' ? 'cities' : 'fifteen';
+  state.endReason = has(state, 'cities') ? 'cities' : 'fifteen';
   state.endTriggered = true;
 
   const scores: Record<string, number> = {};
@@ -621,7 +626,7 @@ const buy: ActionDef<SplendorState> = {
     const reserved = data.reserved.includes(cardId);
     if (!onBoard && !reserved) return { ok: false, reason: '这张牌不在桌上也不在你手里' };
     const spot = state.strongholds[cardId];
-    if (state.expansion === 'strongholds' && spot && spot.owner !== ctx.playerId) {
+    if (has(state, 'strongholds') && spot && spot.owner !== ctx.playerId) {
       return { ok: false, reason: '这张牌被别的公会占了，你买不了' };
     }
     if (!canAfford(state, ctx.playerId, card)) return { ok: false, reason: '宝石不够' };
@@ -664,7 +669,7 @@ const buyConquest: ActionDef<SplendorState> = {
     data.cards.push(cardId);
     state.conquestUsed = true;
     ctx.emit({ type: 'log', key: 'sp.conquestBuy', args: { player: ctx.playerId, card: cardId } });
-    if (state.expansion === 'strongholds') {
+    if (has(state, 'strongholds')) {
       ctx.goTo('stronghold');
       return;
     }
@@ -959,7 +964,7 @@ function turnMoves(state: SplendorState, player: PlayerId): AnyAction[] {
 
   for (const item of boardCards(state)) {
     const spot = state.strongholds[item.cardId];
-    if (state.expansion === 'strongholds' && spot && spot.owner !== player) continue;
+    if (has(state, 'strongholds') && spot && spot.owner !== player) continue;
     if (canAfford(state, player, CARD_BY_ID[item.cardId]!)) {
       moves.push({ type: 'buy', payload: { cardId: item.cardId } });
     }
@@ -1031,25 +1036,22 @@ const splendor: GamePlugin<SplendorState> = {
     realtime: { fast: 45, normal: 90, slow: 180 },
     description: '收宝石、买发展卡、请贵族；2–4 人，先到 15 分并就位的人赢。',
     intro:
-      '经典《璀璨宝石》。每回合四选一：拿 3 个异色宝石、拿 2 个同色宝石、预留一张卡并拿黄金、或买一张卡。\n\n## 每回合\n\n- 拿 3 个不同颜色；或拿 2 个同色（该色场上至少 4 个）\n- 预留 1 张卡（手牌上限 3），同时拿 1 个黄金；黄金可当任意颜色\n- 买卡：场上的或自己预留的，红利会永久抵扣同色价格\n\n## 结束\n\n有人达到 15 分后，本轮走完即结束；分高者胜，同分则买卡少的人胜。\n\n## 扩展\n\n- 繁华之城：不摆贵族，改抢 3 座城市；拿到一块城市板块，本轮走完即结束\n- 荣誉之战：买卡后必须放置/移动要塞或拆掉对手一个；同一张牌上三个自己的要塞可以立刻再买一次\n- 贸易之路：回合结束满足条件即可占下一条能力，永久生效',
+      '经典《璀璨宝石》。每回合四选一：拿 3 个异色宝石、拿 2 个同色宝石、预留一张卡并拿黄金、或买一张卡。\n\n## 每回合\n\n- 拿 3 个不同颜色；或拿 2 个同色（该色场上至少 4 个）\n- 预留 1 张卡（手牌上限 3），同时拿 1 个黄金；黄金可当任意颜色\n- 买卡：场上的或自己预留的，红利会永久抵扣同色价格\n\n## 结束\n\n有人达到 15 分后，本轮走完即结束；分高者胜，同分则买卡少的人胜。\n\n## 扩展\n\n三个模块可以单独开，也可以混开。\n\n- 繁华之城：不摆贵族，改抢 3 座城市；拿到一块城市板块，本轮走完即结束\n- 荣誉之战：买卡后必须放置/移动要塞或拆掉对手一个；同一张牌上三个自己的要塞可以立刻再买一次\n- 贸易之路：回合结束满足条件即可占下一条能力，永久生效',
     expansions: [
       {
         id: 'cities',
         name: '城市扩展 · 繁华之城',
         description: '不摆贵族，改抢 3 座城市：拿到一块城市板块，本轮走完就结束。',
-        group: 'cities',
       },
       {
         id: 'strongholds',
         name: '城市扩展 · 荣誉之战',
         description: '每人 3 个要塞，占领牌桌、控住关键卡；互斥模块之一。',
-        group: 'cities',
       },
       {
         id: 'trading-posts',
         name: '城市扩展 · 贸易之路',
         description: '达成要求占下 5 条能力之一，永久获得加成；互斥模块之一。',
-        group: 'cities',
       },
     ],
     achievements: [
@@ -1064,10 +1066,16 @@ const splendor: GamePlugin<SplendorState> = {
 
   createState({ players, expansions, seed }: SetupContext): SplendorState {
     const rng = mulberry32(seed);
-    const chosen = (expansions ?? []).find(
-      (id): id is ExpansionId =>
-        id === 'cities' || id === 'strongholds' || id === 'trading-posts',
-    );
+    // 扩展可以同时开多个（BGA 也允许混开）；去重后保留平台给的顺序
+    const chosen: ExpansionId[] = [
+      ...new Set(
+        (expansions ?? []).filter(
+          (id): id is ExpansionId =>
+            id === 'cities' || id === 'strongholds' || id === 'trading-posts',
+        ),
+      ),
+    ];
+    const hasCities = chosen.includes('cities');
 
     const decks: Record<Level, string[]> = {
       '1': shuffle(DECKS['1'], rng),
@@ -1096,15 +1104,14 @@ const splendor: GamePlugin<SplendorState> = {
     }
 
     // 繁华之城：不摆贵族，改摆 3 张城市板块（正反面随机）
-    const cities: CityInstance[] =
-      chosen === 'cities'
-        ? shuffle(CITY_TILES, rng)
-            .slice(0, 3)
-            .map((tile) => {
-              const side = (rng() < 0.5 ? 0 : 1) as 0 | 1;
-              return { key: `${tile.id}-${side}`, tileId: tile.id, side, owner: null };
-            })
-        : [];
+    const cities: CityInstance[] = hasCities
+      ? shuffle(CITY_TILES, rng)
+          .slice(0, 3)
+          .map((tile) => {
+            const side = (rng() < 0.5 ? 0 : 1) as 0 | 1;
+            return { key: `${tile.id}-${side}`, tileId: tile.id, side, owner: null };
+          })
+      : [];
 
     return {
       players: [...players],
@@ -1114,12 +1121,12 @@ const splendor: GamePlugin<SplendorState> = {
       finished: false,
       ranking: null,
       rngSeed: seed >>> 0,
-      expansion: chosen ?? null,
+      expansions: chosen,
       supply,
       data,
       board,
       decks,
-      nobles: chosen === 'cities' ? [] : shuffle(NOBLES.map((noble) => noble.id), rng).slice(0, nobles),
+      nobles: hasCities ? [] : shuffle(NOBLES.map((noble) => noble.id), rng).slice(0, nobles),
       cities,
       strongholds: {},
       seals,
@@ -1165,7 +1172,7 @@ const splendor: GamePlugin<SplendorState> = {
       finished: state.finished,
       ranking: state.ranking,
       data: {
-        expansion: state.expansion,
+        expansions: state.expansions,
         supply: state.supply,
         board: state.board,
         deckCounts: {

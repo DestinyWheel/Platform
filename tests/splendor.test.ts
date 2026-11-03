@@ -229,7 +229,7 @@ test('璀璨宝石：15 分后打完本轮才结束，平局比买卡数', () =>
 
 test('璀璨宝石：买卡后必须处理要塞，占领的牌对手买不了', () => {
   const state = fresh(['a', 'b'], ['strongholds']);
-  assert.equal(state.expansion, 'strongholds');
+  assert.deepEqual(state.expansions, ['strongholds']);
 
   const card = CARD_BY_ID['L1-08']!;
   state.board['1'][0] = card.id;
@@ -275,7 +275,7 @@ test('璀璨宝石：三个要塞压同一张卡可以立刻再买一次', () =>
 
 test('璀璨宝石：贸易之路占下能力，黄金顶两颗', () => {
   const state = fresh(['a', 'b'], ['trading-posts']);
-  assert.equal(state.expansion, 'trading-posts');
+  assert.deepEqual(state.expansions, ['trading-posts']);
   state.data.a.cards = CARDS.filter((card) => card.bonus === 'white').slice(0, 2).map((card) => card.id);
 
   const after = run(state, 'a', { type: 'take3', payload: { colors: ['white', 'blue', 'green'] } });
@@ -294,7 +294,7 @@ test('璀璨宝石：贸易之路占下能力，黄金顶两颗', () => {
 
 test('璀璨宝石：繁华之城开局不摆贵族，摆 3 张城市板块', () => {
   const state = fresh(['a', 'b'], ['cities']);
-  assert.equal(state.expansion, 'cities');
+  assert.deepEqual(state.expansions, ['cities']);
   assert.equal(state.nobles.length, 0, '城市模式不用贵族');
   assert.equal(state.cities.length, 3);
   for (const city of state.cities) {
@@ -355,8 +355,29 @@ test('璀璨宝石：多人拿到城市板块时比声望；城市模式没有 1
   assert.equal(continued.turn, 1);
 });
 
+test('璀璨宝石：三个模块可以同时开', () => {
+  const state = fresh(['a', 'b'], ['cities', 'strongholds', 'trading-posts']);
+  assert.deepEqual(state.expansions, ['cities', 'strongholds', 'trading-posts']);
+  assert.equal(state.nobles.length, 0, '城市模块生效时没有贵族');
+  assert.equal(state.cities.length, 3);
+  assert.equal(state.decks['1'].length, 36, '不会因为多开扩展而多发牌');
+
+  // 混开时买卡仍然要处理要塞
+  const card = CARD_BY_ID['L1-08']!;
+  state.board['1'][0] = card.id;
+  state.data.a.tokens = { ...emptyTokens(), white: 12, blue: 12, green: 12, red: 12, black: 12 };
+  const bought = run(state, 'a', { type: 'buy', payload: { cardId: card.id } });
+  assert.equal(bought.phase, 'stronghold');
+});
+
 test('璀璨宝石：任意局面都能走完（随机 300 步）', () => {
-  for (const expansions of [[], ['cities'], ['strongholds'], ['trading-posts']]) {
+  for (const expansions of [
+    [],
+    ['cities'],
+    ['strongholds'],
+    ['trading-posts'],
+    ['cities', 'strongholds', 'trading-posts'],
+  ]) {
     let state = fresh(['a', 'b', 'c'], expansions);
     const players = state.players;
     let steps = 0;

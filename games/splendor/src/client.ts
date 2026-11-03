@@ -38,10 +38,26 @@ const LEVEL_COLOR: Record<'1' | '2' | '3', string> = {
 /** 四个座位的颜色，用来标要塞归属 */
 const SEAT_COLOR = ['#4c8dff', '#2f9e62', '#d64545', '#e3b341'];
 
+const EXPANSION_LABEL: Record<string, string> = {
+  cities: '扩展 · 繁华之城',
+  strongholds: '扩展 · 荣誉之战',
+  'trading-posts': '扩展 · 贸易之路',
+};
+
 const LEVEL_NAME: Record<'1' | '2' | '3', string> = {
   '1': '等级 1',
   '2': '等级 2',
   '3': '等级 3',
+};
+
+/** 日志和提示里只用单字，卡面不写颜色名 */
+const COLOR_SHORT: Record<TokenColor, string> = {
+  white: '白',
+  blue: '蓝',
+  green: '绿',
+  red: '红',
+  black: '黑',
+  gold: '金',
 };
 
 interface ViewPlayer {
@@ -64,7 +80,7 @@ interface ViewCity {
 }
 
 interface ViewData {
-  expansion: 'cities' | 'strongholds' | 'trading-posts' | null;
+  expansions: string[];
   supply: Record<TokenColor, number>;
   board: Record<'1' | '2' | '3', (string | null)[]>;
   deckCounts: Record<'1' | '2' | '3', number>;
@@ -101,8 +117,9 @@ const CSS = `
 .sp-card.occupied { padding-left: 15px; }
 .sp-card-top { display: flex; justify-content: space-between; align-items: flex-start; min-height: 18px; }
 .sp-pts { font-size: 21px; font-weight: 800; line-height: 1; color: #f5f7fa; }
-.sp-bonus { width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255,255,255,.35); box-shadow: inset 0 2px 4px rgba(255,255,255,.45), 0 2px 6px rgba(0,0,0,.35); flex: none; display: block; margin: 10px auto 5px; }
-.sp-card-name { font-size: 10px; color: #8b98a7; letter-spacing: .02em; text-align: center; }
+.sp-bonus { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,.35); box-shadow: inset 0 1px 2px rgba(255,255,255,.45); flex: none; display: block; }
+.sp-card-mid { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; gap: 3px; min-height: 20px; }
+.sp-fort { width: 10px; height: 18px; border-radius: 3px; box-shadow: 0 0 0 1px rgba(0,0,0,.45), inset 0 1px 2px rgba(255,255,255,.25); }
 .sp-cost { margin-top: auto; display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; position: relative; z-index: 2; }
 .sp-pip { width: 17px; height: 17px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #1b2029; border: 1px solid rgba(255,255,255,.35); box-shadow: inset 0 0 0 1px rgba(0,0,0,.16); font-variant-numeric: tabular-nums; }
 .sp-deck { width: 104px; height: 144px; border-radius: 10px; border: 2px solid #2c3745; background: repeating-linear-gradient(135deg, #1b2230, #1b2230 6px, #232c3c 6px, #232c3c 12px); display: flex; align-items: center; justify-content: center; color: #8b98a7; font-size: 12px; flex: none; margin-left: auto; }
@@ -163,7 +180,6 @@ const CSS = `
 .sp-seat.on { background: #4c8dff; }
 .sp-strong { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; color: #f0b37e; }
 .sp-strong i { width: 7px; height: 7px; border-radius: 2px; background: #d0904a; display: inline-block; }
-.sp-strong-count { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #0e1116; box-shadow: 0 0 0 2px rgba(14,17,22,.55); }
 .sp-modal { position: absolute; inset: 0; background: rgba(6,9,13,.7); display: flex; align-items: center; justify-content: center; z-index: 9; padding: 16px; }
 .sp-modal-card { width: min(460px, 100%); border: 1px solid #3a4656; border-radius: 16px; background: #121821; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .sp-modal h3 { margin: 0; font-size: 16px; }
@@ -219,10 +235,9 @@ function cardHtml(
   return `<div class="sp-card${options.picked ? ' picked' : ''}" data-act="card" data-card="${card.id}" style="border-color:${LEVEL_COLOR[String(card.level) as '1' | '2' | '3']}${options.strongholds ? `;outline:2px solid ${options.strongholdColor ?? '#d0904a'};outline-offset:2px` : ''}">
     <div class="sp-card-top">
       <span class="sp-pts">${card.prestige > 0 ? card.prestige : ''}</span>
-      ${options.strongholds ? `<span class="sp-strong-count" style="background:${options.strongholdColor ?? '#d0904a'}" title="要塞 ×${options.strongholds}">${options.strongholds}</span>` : ''}
+      <span class="sp-bonus" style="background:${GEM_HEX[card.bonus]}" title="${esc(COLOR_NAME[card.bonus])} 红利"></span>
     </div>
-    <span class="sp-bonus" style="background:${GEM_HEX[card.bonus]}" title="${esc(COLOR_NAME[card.bonus])}"></span>
-    <div class="sp-card-name">${esc(COLOR_NAME[card.bonus])}</div>
+    <div class="sp-card-mid" title="要塞 ×${options.strongholds ?? 0}">${options.strongholds ? `<span class="sp-fort" style="background:${options.strongholdColor ?? '#d0904a'}"></span>`.repeat(options.strongholds) : ''}</div>
     <div class="sp-cost">${cardCost(card)}</div>
   </div>`;
 }
@@ -343,6 +358,9 @@ export function createSplendorClient(): GameClient {
     const turnName = view.turn ? names[view.turn] ?? view.turn : null;
     const my = me();
     const active = view.turn === my && !view.finished;
+    const badges = (d.expansions ?? [])
+      .map((id) => `<span class="sp-badge">${esc(EXPANSION_LABEL[id] ?? id)}</span>`)
+      .join('');
 
     const boardRows = (['3', '2', '1'] as const)
       .map((level) => {
@@ -383,7 +401,7 @@ export function createSplendorClient(): GameClient {
       : '<span class="sp-muted">没有贵族了</span>';
 
     const cityPanel =
-      d.expansion === 'cities'
+      d.expansions.includes('cities')
         ? `<div class="sp-panel">
             <div class="sp-panel-title"><span>城市</span><span>3 座</span></div>
             <div class="sp-city-list">${d.cities
@@ -401,7 +419,7 @@ export function createSplendorClient(): GameClient {
             <div class="sp-nobles">${nobles}</div>
           </div>`;
 
-    const powers = d.expansion === 'trading-posts'
+    const powers = d.expansions.includes('trading-posts')
       ? TRADING_POWERS.map((power) => {
           const reach = d.pendingPowers.includes(power.id);
           const owners = d.players.filter((player) => player.seals.includes(power.id));
@@ -457,7 +475,7 @@ export function createSplendorClient(): GameClient {
           ${reserved ? `<div class="sp-line"><span class="sp-line-label">预留</span><div class="sp-reserved" title="预留${isMe ? '' : '（对手看不到牌面）'}">${reserved}</div></div>` : ''}
           ${nobles ? `<div class="sp-line"><span class="sp-line-label">贵族</span><div class="sp-reserved">${nobles}</div></div>` : ''}
           ${cityLabel ? `<div class="sp-city-owner">🏙️ ${esc(cityLabel)}</div>` : ''}
-          ${d.expansion === 'trading-posts' && player.seals.length ? `<div class="sp-seats">${'<span class="sp-seat on"></span>'.repeat(player.seals.length)}<span class="sp-muted">纹章 ${player.seals.length}/5</span></div>` : ''}
+          ${d.expansions.includes('trading-posts') && player.seals.length ? `<div class="sp-seats">${'<span class="sp-seat on"></span>'.repeat(player.seals.length)}<span class="sp-muted">纹章 ${player.seals.length}/5</span></div>` : ''}
         </div>`;
       })
       .join('');
@@ -487,7 +505,6 @@ export function createSplendorClient(): GameClient {
           return `<div class="sp-detail">
             <div class="sp-detail-card" style="border-color:${LEVEL_COLOR[String(focus.level) as '1' | '2' | '3']}">
               <div class="sp-card-top"><span class="sp-pts">${focus.prestige || ''}</span><span class="sp-bonus" style="background:${GEM_HEX[focus.bonus]}"></span></div>
-              <div class="sp-card-name">${esc(COLOR_NAME[focus.bonus])}红利</div>
               <div class="sp-cost">${cardCost(focus)}</div>
             </div>
             <div class="sp-detail-info">
@@ -516,7 +533,7 @@ export function createSplendorClient(): GameClient {
       if (view.phase === 'buy-gem') return `<div class="sp-hint warn">贸易之路能力：买卡后拿 1 个宝石，点宝石堆。</div>`;
       if (view.phase === 'extra-gem') return `<div class="sp-hint warn">贸易之路能力：拿 2 个同色后额外拿 1 个异色。</div>`;
       if (!active) return `<div class="sp-hint">等 ${esc(turnName ?? '对手')} 行动。</div>`;
-      if (selected.length > 0) return `<div class="sp-hint">已选 ${selected.map((gem) => COLOR_NAME[gem]).join('、')}：${takeConfirmed() ? '可以拿取' : '再选一个，或点同一颜色拿两个'}</div>`;
+      if (selected.length > 0) return `<div class="sp-hint">已选 ${selected.map((gem) => dot(gem)).join('')}：${takeConfirmed() ? '可以拿取' : '再选一个，或点同一颜色拿两个'}</div>`;
       return `<div class="sp-hint">点宝石拿取、点卡牌买入或预留。</div>`;
     })();
 
@@ -538,9 +555,7 @@ export function createSplendorClient(): GameClient {
         <span class="sp-turn">${view.finished ? '对局结束' : `${esc(turnName ?? '—')} 的回合`}</span>
         <span class="sp-muted">第 ${view.round} 轮</span>
         ${d.endTriggered && !view.finished ? '<span class="sp-badge warn">本轮结束就结算</span>' : ''}
-        ${d.expansion === 'cities' ? '<span class="sp-badge">扩展 · 繁华之城</span>' : ''}
-        ${d.expansion === 'strongholds' ? '<span class="sp-badge">扩展 · 荣誉之战</span>' : ''}
-        ${d.expansion === 'trading-posts' ? '<span class="sp-badge">扩展 · 贸易之路</span>' : ''}
+        ${badges}
         <span style="flex:1"></span>
         ${takeButton}
         <button class="sp-btn" data-act="clear" ${selected.length ? '' : 'disabled'}>清空</button>
@@ -718,21 +733,21 @@ export function createSplendorClient(): GameClient {
     formatLog(entry: LogEntry): string | null {
       const args = (entry.args ?? {}) as Record<string, unknown>;
       const name = (id: unknown) => names[String(id)] ?? String(id);
-      const colorName = (color: unknown) => COLOR_NAME[String(color) as TokenColor] ?? String(color);
+      const colorName = (color: unknown) => COLOR_SHORT[String(color) as TokenColor] ?? String(color);
       switch (entry.key) {
         case 'sp.take3':
           return `${name(args.player)} 拿了 ${(args.colors as string[]).map(colorName).join('、')}`;
         case 'sp.take2':
-          return `${name(args.player)} 拿了 2 个${colorName(args.color)}`;
+          return `${name(args.player)} 拿了 2 个${colorName(args.color)}宝石`;
         case 'sp.extraGem':
-          return `${name(args.player)} 用贸易之路额外拿了 1 个${colorName(args.color)}`;
+          return `${name(args.player)} 用贸易之路额外拿了 1 个${colorName(args.color)}宝石`;
         case 'sp.buyGem':
-          return `${name(args.player)} 买卡后拿了 1 个${colorName(args.color)}`;
+          return `${name(args.player)} 买卡后拿了 1 个${colorName(args.color)}宝石`;
         case 'sp.reserve':
           return `${name(args.player)} 预留了一张牌`;
         case 'sp.buy': {
           const card = CARD_BY_ID[String(args.card)];
-          return `${name(args.player)} 买下 ${card ? colorName(card.bonus) + '卡' : '一张牌'}${card?.prestige ? `（+${card.prestige} 分）` : ''}`;
+          return `${name(args.player)} 买下 ${card ? colorName(card.bonus) + '色卡' : '一张牌'}${card?.prestige ? `（+${card.prestige} 分）` : ''}`;
         }
         case 'sp.conquestBuy': {
           const card = CARD_BY_ID[String(args.card)];
@@ -751,7 +766,7 @@ export function createSplendorClient(): GameClient {
         case 'sp.strongholdRemove':
           return `${name(args.player)} 拆掉了对手一枚要塞`;
         case 'sp.discard':
-          return `${name(args.player)} 弃回 1 个${colorName(args.color)}`;
+          return `${name(args.player)} 弃回 1 个${colorName(args.color)}宝石`;
         case 'sp.pass':
           return `${name(args.player)} 无牌可拿，跳过`;
         case 'sp.gameEnd': {
