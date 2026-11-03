@@ -99,11 +99,10 @@ const CSS = `
 .sp-card.empty:hover { transform: none; box-shadow: none; }
 .sp-card.picked { outline: 2px dashed #f2c94c; outline-offset: 2px; }
 .sp-card.occupied { padding-left: 15px; }
-.sp-card-top { display: flex; justify-content: space-between; align-items: flex-start; min-height: 18px; position: relative; z-index: 2; }
+.sp-card-top { display: flex; justify-content: space-between; align-items: flex-start; min-height: 18px; }
 .sp-pts { font-size: 21px; font-weight: 800; line-height: 1; color: #f5f7fa; }
-.sp-bonus { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(255,255,255,.35); box-shadow: inset 0 1px 2px rgba(255,255,255,.4); flex: none; }
-.sp-watermark { position: absolute; left: 50%; top: 55%; width: 42px; height: 42px; margin: -21px 0 0 -21px; transform: rotate(45deg); border-radius: 9px; opacity: .55; }
-.sp-card-name { font-size: 10px; color: #8b98a7; letter-spacing: .02em; position: relative; z-index: 2; }
+.sp-bonus { width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255,255,255,.35); box-shadow: inset 0 2px 4px rgba(255,255,255,.45), 0 2px 6px rgba(0,0,0,.35); flex: none; display: block; margin: 10px auto 5px; }
+.sp-card-name { font-size: 10px; color: #8b98a7; letter-spacing: .02em; text-align: center; }
 .sp-cost { margin-top: auto; display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; position: relative; z-index: 2; }
 .sp-pip { width: 17px; height: 17px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #1b2029; border: 1px solid rgba(255,255,255,.35); box-shadow: inset 0 0 0 1px rgba(0,0,0,.16); font-variant-numeric: tabular-nums; }
 .sp-deck { width: 104px; height: 144px; border-radius: 10px; border: 2px solid #2c3745; background: repeating-linear-gradient(135deg, #1b2230, #1b2230 6px, #232c3c 6px, #232c3c 12px); display: flex; align-items: center; justify-content: center; color: #8b98a7; font-size: 12px; flex: none; margin-left: auto; }
@@ -164,7 +163,7 @@ const CSS = `
 .sp-seat.on { background: #4c8dff; }
 .sp-strong { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; color: #f0b37e; }
 .sp-strong i { width: 7px; height: 7px; border-radius: 2px; background: #d0904a; display: inline-block; }
-.sp-strong-count { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); min-width: 24px; height: 24px; padding: 0 4px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: #0e1116; z-index: 3; box-shadow: 0 0 0 2px rgba(14,17,22,.55); }
+.sp-strong-count { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #0e1116; box-shadow: 0 0 0 2px rgba(14,17,22,.55); }
 .sp-modal { position: absolute; inset: 0; background: rgba(6,9,13,.7); display: flex; align-items: center; justify-content: center; z-index: 9; padding: 16px; }
 .sp-modal-card { width: min(460px, 100%); border: 1px solid #3a4656; border-radius: 16px; background: #121821; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .sp-modal h3 { margin: 0; font-size: 16px; }
@@ -218,14 +217,13 @@ function cardHtml(
   options: { picked?: boolean; strongholds?: number; strongholdColor?: string } = {},
 ): string {
   return `<div class="sp-card${options.picked ? ' picked' : ''}" data-act="card" data-card="${card.id}" style="border-color:${LEVEL_COLOR[String(card.level) as '1' | '2' | '3']}${options.strongholds ? `;outline:2px solid ${options.strongholdColor ?? '#d0904a'};outline-offset:2px` : ''}">
-    <span class="sp-watermark" style="background:${GEM_HEX[card.bonus]}22; border: 1px solid ${GEM_HEX[card.bonus]}99"></span>
     <div class="sp-card-top">
       <span class="sp-pts">${card.prestige > 0 ? card.prestige : ''}</span>
-      <span class="sp-bonus" style="background:${GEM_HEX[card.bonus]}" title="${esc(COLOR_NAME[card.bonus])}"></span>
+      ${options.strongholds ? `<span class="sp-strong-count" style="background:${options.strongholdColor ?? '#d0904a'}" title="要塞 ×${options.strongholds}">${options.strongholds}</span>` : ''}
     </div>
+    <span class="sp-bonus" style="background:${GEM_HEX[card.bonus]}" title="${esc(COLOR_NAME[card.bonus])}"></span>
     <div class="sp-card-name">${esc(COLOR_NAME[card.bonus])}</div>
     <div class="sp-cost">${cardCost(card)}</div>
-    ${options.strongholds ? `<span class="sp-strong-count" style="background:${options.strongholdColor ?? '#d0904a'}" title="要塞 ×${options.strongholds}">${options.strongholds}</span>` : ''}
   </div>`;
 }
 
