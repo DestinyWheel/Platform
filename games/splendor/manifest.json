@@ -1,0 +1,78 @@
+{
+  "id": "splendor",
+  "name": "璀璨宝石",
+  "version": "0.1.0",
+  "apiVersion": "^1.0.0",
+  "players": {
+    "min": 2,
+    "max": 4
+  },
+  "modes": [
+    "realtime",
+    "turnbased"
+  ],
+  "tags": [
+    "卡牌",
+    "策略",
+    "资源"
+  ],
+  "estimatedMinutes": 30,
+  "realtime": {
+    "fast": 45,
+    "normal": 90,
+    "slow": 180
+  },
+  "description": "收宝石、买发展卡、请贵族；2–4 人，先到 15 分并就位的人赢。",
+  "intro": "经典《璀璨宝石》。每回合四选一：拿 3 个异色宝石、拿 2 个同色宝石、预留一张卡并拿黄金、或买一张卡。\n\n## 每回合\n\n- 拿 3 个不同颜色；或拿 2 个同色（该色场上至少 4 个）\n- 预留 1 张卡（手牌上限 3），同时拿 1 个黄金；黄金可当任意颜色\n- 买卡：场上的或自己预留的，红利会永久抵扣同色价格\n\n## 结束\n\n有人达到 15 分后，本轮走完即结束；分高者胜，同分则买卡少的人胜。\n\n## 扩展\n\n- 荣誉之战：买卡后必须放置/移动要塞或拆掉对手一个；同一张牌上三个自己的要塞可以立刻再买一次\n- 贸易之路：回合结束满足条件即可占下一条能力，永久生效",
+  "expansions": [
+    {
+      "id": "strongholds",
+      "name": "城市扩展 · 荣誉之战",
+      "description": "每人 3 个要塞，占领牌桌、控住关键卡；互斥模块之一。",
+      "group": "cities"
+    },
+    {
+      "id": "trading-posts",
+      "name": "城市扩展 · 贸易之路",
+      "description": "达成要求占下 5 条能力之一，永久获得加成；互斥模块之一。",
+      "group": "cities"
+    }
+  ],
+  "achievements": [
+    {
+      "id": "first-win",
+      "name": "首胜",
+      "description": "在璀璨宝石里赢下第一局",
+      "icon": "💎",
+      "color": "#3f4a7a"
+    },
+    {
+      "id": "fifteen",
+      "name": "十五分",
+      "description": "一局打到 15 分以上",
+      "icon": "✨",
+      "color": "#6b5320"
+    },
+    {
+      "id": "noble-collector",
+      "name": "贵族收藏",
+      "description": "一局请到 3 位贵族",
+      "icon": "👑",
+      "color": "#4a2f5a"
+    },
+    {
+      "id": "stronghold-master",
+      "name": "三堡压顶",
+      "description": "三个要塞压在同一张卡上",
+      "icon": "🏰",
+      "color": "#2c5a4a"
+    },
+    {
+      "id": "trade-empire",
+      "name": "贸易帝国",
+      "description": "一局占下全部 5 条贸易之路能力",
+      "icon": "🐫",
+      "color": "#5a4a2c"
+    }
+  ]
+}

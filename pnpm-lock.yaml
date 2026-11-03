@@ -143,6 +143,15 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
 
+  games/splendor:
+    dependencies:
+      '@platform/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
   games/splendor-duel:
     dependencies:
       '@platform/sdk':
