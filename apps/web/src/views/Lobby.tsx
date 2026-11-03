@@ -3,6 +3,7 @@ import type {
   GameManifest,
   LeaderboardEntry,
   PlayerStatsRow,
+  RatingScopeInfo,
   RecentMatchRow,
   RecentPlayer,
   SocialPulse,
@@ -70,6 +71,8 @@ export function Lobby({
   const [recent, setRecent] = useState<RecentMatchRow[]>([]);
   const [boardGame, setBoardGame] = useState('');
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
+  const [scopes, setScopes] = useState<RatingScopeInfo[]>([]);
+  const [ratingScope, setRatingScope] = useState('');
   const [roomCode, setRoomCode] = useState('');
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -141,15 +144,25 @@ export function Lobby({
     ? boardGame
     : rankedGames[0]?.id ?? '';
   useEffect(() => {
+    setRatingScope('');
+    setScopes([]);
+    if (!effectiveGame) return;
+    api
+      .ratingScopes(effectiveGame)
+      .then((data) => setScopes(data.scopes))
+      .catch(() => setScopes([]));
+  }, [effectiveGame]);
+
+  useEffect(() => {
     if (!effectiveGame) {
       setBoard([]);
       return;
     }
     api
-      .leaderboard(effectiveGame)
+      .leaderboard(effectiveGame, ratingScope)
       .then((data) => setBoard(data.entries))
       .catch(() => setBoard([]));
-  }, [effectiveGame]);
+  }, [effectiveGame, ratingScope]);
 
   const winRate = (row: PlayerStatsRow): string =>
     row.games === 0 ? '—' : `${Math.round((row.wins / row.games) * 100)}%`;
@@ -432,8 +445,13 @@ export function Lobby({
               </thead>
               <tbody>
                 {perGame.map((row) => (
-                  <tr key={row.gameId}>
-                    <td>{row.gameName}</td>
+                  <tr key={`${row.gameId}:${row.ratingScope}`}>
+                    <td>
+                      {row.gameName}
+                      {row.ratingScope ? (
+                        <span className="muted small"> · {row.ratingLabel}</span>
+                      ) : null}
+                    </td>
                     <td>{row.games}</td>
                     <td>{row.wins}</td>
                     <td>{winRate(row)}</td>
@@ -451,7 +469,8 @@ export function Lobby({
                     {match.isWin ? '胜' : `第 ${match.rank} 名`}
                   </span>
                   <span className="muted small">
-                    {match.gameName} · {match.players} 人
+                    {match.gameName}
+                    {match.ratingScope ? ` · ${match.ratingLabel}` : ''} · {match.players} 人
                   </span>
                   <button className="ghost small" onClick={() => onReplay(match.tableId)}>
                     回放
@@ -474,6 +493,19 @@ export function Lobby({
                 {rankedGames.map((game) => (
                   <option key={game.id} value={game.id}>
                     {game.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {scopes.length > 1 ? (
+              <select
+                className="ghost"
+                value={ratingScope}
+                onChange={(event) => setRatingScope(event.target.value)}
+              >
+                {scopes.map((scope) => (
+                  <option key={scope.value || 'base'} value={scope.value}>
+                    {scope.label}（{scope.games} 场）
                   </option>
                 ))}
               </select>

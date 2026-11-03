@@ -5,6 +5,7 @@ import type {
   AdminRatingRow,
   AdminUserRow,
   GameManifest,
+  RatingScopeInfo,
 } from '@platform/sdk';
 import { ApiError, api, type Session } from '../api';
 import { copyText } from '../clipboard';
@@ -105,19 +106,39 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
 
   const [gameList, setGameList] = useState<GameManifest[]>([]);
   const [ratingGame, setRatingGame] = useState('');
+  const [ratingScope, setRatingScope] = useState('');
+  const [ratingScopes, setRatingScopes] = useState<RatingScopeInfo[]>([]);
   const [ratings, setRatings] = useState<AdminRatingRow[]>([]);
   const [ratingQuery, setRatingQuery] = useState('');
 
-  const loadRatings = useCallback(async (gameId: string): Promise<void> => {
-    if (!gameId) return;
-    try {
-      const data = await api.adminRatings(gameId);
-      setRatings(data.rows);
-      setError(null);
-    } catch (err) {
-      setError(messageOf(err));
-    }
-  }, []);
+  const loadRatings = useCallback(
+    async (gameId: string, scope: string): Promise<void> => {
+      if (!gameId) return;
+      try {
+        const data = await api.adminRatings(gameId, scope);
+        setRatings(data.rows);
+        setError(null);
+      } catch (err) {
+        setError(messageOf(err));
+      }
+    },
+    [],
+  );
+
+  const selectRatingGame = useCallback(
+    async (gameId: string): Promise<void> => {
+      setRatingGame(gameId);
+      setRatingScope('');
+      if (!gameId) return;
+      const scopes = await api
+        .ratingScopes(gameId)
+        .then((data) => data.scopes)
+        .catch(() => [] as RatingScopeInfo[]);
+      setRatingScopes(scopes);
+      await loadRatings(gameId, '');
+    },
+    [loadRatings],
+  );
 
   useEffect(() => {
     if (tab === 'overview') void loadOverview();
@@ -128,21 +149,19 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
         if (gameList.length === 0) {
           const data = await api.games().catch(() => ({ games: [] as GameManifest[] }));
           setGameList(data.games);
-          const first = data.games[0]?.id ?? '';
-          setRatingGame(first);
-          await loadRatings(first);
+          await selectRatingGame(data.games[0]?.id ?? '');
         } else {
-          await loadRatings(ratingGame || gameList[0]!.id);
+          await selectRatingGame(ratingGame || gameList[0]!.id);
         }
       })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, loadOverview, loadPlugins, loadUsers, loadRatings]);
+  }, [tab, loadOverview, loadPlugins, loadUsers, selectRatingGame]);
 
   const toggleHide = async (row: AdminRatingRow): Promise<void> => {
     await run(`hide:${row.userId}`, async () => {
-      await api.adminHideRating(ratingGame, row.userId, !row.hidden);
-      await loadRatings(ratingGame);
+      await api.adminHideRating(ratingGame, ratingScope, row.userId, !row.hidden);
+      await loadRatings(ratingGame, ratingScope);
       return row.hidden ? `已恢复 ${row.name} 的排名` : `已把 ${row.name} 从榜单上藏掉`;
     });
   };
@@ -530,10 +549,7 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
               <span className="muted small">游戏</span>
               <select
                 value={ratingGame}
-                onChange={(event) => {
-                  setRatingGame(event.target.value);
-                  void loadRatings(event.target.value);
-                }}
+                onChange={(event) => void selectRatingGame(event.target.value)}
               >
                 {gameList.map((game) => (
                   <option key={game.id} value={game.id}>
@@ -542,6 +558,24 @@ export function Admin({ session, onExit }: { session: Session; onExit: () => voi
                 ))}
               </select>
             </label>
+            {ratingScopes.length > 1 ? (
+              <label className="follow-group">
+                <span className="muted small">分榜</span>
+                <select
+                  value={ratingScope}
+                  onChange={(event) => {
+                    setRatingScope(event.target.value);
+                    void loadRatings(ratingGame, event.target.value);
+                  }}
+                >
+                  {ratingScopes.map((scope) => (
+                    <option key={scope.value || 'base'} value={scope.value}>
+                      {scope.label}（{scope.games} 场）
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <input
               className="game-search"
               value={ratingQuery}

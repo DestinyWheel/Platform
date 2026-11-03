@@ -12,6 +12,7 @@ import type {
   LeaderboardEntry,
   Notification,
   PlayerStatsRow,
+  RatingScopeInfo,
   RecentMatchRow,
   RecentPlayer,
   ReplayPayload,
@@ -210,6 +211,7 @@ export const api = {
     gameId: string;
     maxPlayers?: number;
     options?: Record<string, unknown>;
+    expansions?: string[];
     mode?: 'realtime' | 'turnbased';
     pace?: string;
     /** 每日可行动时段，UTC 当天第几分钟 */
@@ -224,6 +226,7 @@ export const api = {
 
   /** 随机加入：没桌就现开一张，所以一定会给你一个牌桌 */
   quickMatch: (gameId?: string, settings?: {
+    expansions?: string[];
     mode?: 'realtime' | 'turnbased';
     pace?: string;
     windowStart?: number | null;
@@ -254,6 +257,13 @@ export const api = {
       body: JSON.stringify({ gameId, version }),
     }),
 
+  /** 本局扩展提示：非房主玩家确认一次 */
+  ackExpansionNotice: (tableId: string, key: string) =>
+    request<{ ok: true }>(`/tables/${tableId}/notices/ack`, {
+      method: 'POST',
+      body: JSON.stringify({ key }),
+    }),
+
   startTable: (id: string) => request<{ ok: true }>(`/tables/${id}/start`, { method: 'POST' }),
 
   snapshot: (id: string) => request<{ snapshot: TableSnapshot }>(`/tables/${id}`),
@@ -263,9 +273,14 @@ export const api = {
   stats: () =>
     request<{ perGame: PlayerStatsRow[]; recent: RecentMatchRow[] }>('/stats/me'),
 
-  leaderboard: (gameId: string) =>
-    request<{ gameId: string; entries: LeaderboardEntry[] }>(
-      `/leaderboard?gameId=${encodeURIComponent(gameId)}`,
+  leaderboard: (gameId: string, ratingScope = '') =>
+    request<{ gameId: string; ratingScope: string; entries: LeaderboardEntry[] }>(
+      `/leaderboard?gameId=${encodeURIComponent(gameId)}&ratingScope=${encodeURIComponent(ratingScope)}`,
+    ),
+
+  ratingScopes: (gameId: string) =>
+    request<{ scopes: RatingScopeInfo[] }>(
+      `/games/${encodeURIComponent(gameId)}/rating-scopes`,
     ),
 
   /* ------------------------------ 用户 / 社交 ------------------------------ */
@@ -400,15 +415,15 @@ export const api = {
   adminUsers: () => request<{ users: AdminUserRow[] }>('/admin/users'),
 
   /** 某个游戏的完整榜单（含被隐藏的人） */
-  adminRatings: (gameId: string) =>
-    request<{ gameId: string; rows: AdminRatingRow[] }>(
-      `/admin/ratings?gameId=${encodeURIComponent(gameId)}`,
+  adminRatings: (gameId: string, ratingScope = '') =>
+    request<{ gameId: string; ratingScope: string; rows: AdminRatingRow[] }>(
+      `/admin/ratings?gameId=${encodeURIComponent(gameId)}&ratingScope=${encodeURIComponent(ratingScope)}`,
     ),
 
-  adminHideRating: (gameId: string, userId: string, hidden: boolean) =>
+  adminHideRating: (gameId: string, ratingScope: string, userId: string, hidden: boolean) =>
     request<{ ok: true }>('/admin/ratings/hide', {
       method: 'POST',
-      body: JSON.stringify({ gameId, userId, hidden }),
+      body: JSON.stringify({ gameId, ratingScope, userId, hidden }),
     }),
 
   adminSetAdmin: (id: string, isAdmin: boolean) =>

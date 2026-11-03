@@ -183,10 +183,19 @@ export interface GameManifest {
   description?: string;          // 一句话简介，大厅卡片上显示
   intro?: string;                // 详情页介绍：空行分段、'## ' 小标题、'- ' 条目
   notes?: string[];              // 更新公告，新版本第一次进桌强制读一次
+  expansions?: {                 // 开房前可选的扩展模块
+    id: string;
+    name: string;
+    description?: string;
+    group?: string;              // 同组互斥
+  }[];
   elo?: boolean;                 // 要不要 Elo/排行榜，默认 true；合作游戏写 false
   ui?: { hideLog?: boolean };    // 牌桌界面偏好：这个游戏的日志没用就别占一列
 }
 ```
+
+扩展选择经 `createState(ctx.expansions)` 传给插件；平台按实际组合冻结
+`tables.rating_scope`，并把它作为 Elo 分榜键。详见 [extensions.md](./extensions.md)。
 
 `description` 和 `intro` 是给别人看的：大厅卡片显示一句话，详情页把 `intro` 排成小标题 + 条目 + 段落。不填也能跑，只是详情页会说「这个游戏还没写介绍」。
 
@@ -508,6 +517,15 @@ CREATE TABLE match_actions (
 **版本公告**：`version_acks(user_id, game_id, version)`。manifest 里写 `notes`，
 玩家第一次进到跑这一版的桌会强制读一次，每人对每个版本只记一条。
 
+**扩展选择与 Elo 分榜**：`tables.expansions` 存本桌选择，`tables.rating_scope`
+冻结分榜签名（空串 = 本体；非空为按 id 排序的扩展 id 用 `+` 连接）；
+`ratings` / `match_results` 也带 `rating_scope`。
+本体和每个扩展组合各自一个榜，旧数据默认归本体。
+
+**扩展通知**：`table_notice_acks(user_id, table_id, notice_key)`。非房主玩家进入
+使用扩展的桌时，在版本公告之后收到一次「本局使用的扩展」；每人对每桌的每个
+扩展组合只提示一次，再来一局会重新提示。
+
 ---
 
 ## 6. 实时协议
@@ -655,6 +673,7 @@ platform/
 
 - **异步长局（correspondence）要不要做？** 现在按"同桌在线、60s/步"设计，`tables.options` 已预留 `mode` 与 `deadlineMs`。真要做，主要补"轮到你"的通知（Web Push / 邮件）和更长的截止时间，核心结构不用动。
 - **多实例什么时候上？** 见 §2.2。单机够用就不动，但 `Bus`/`Presence`/`TimerScheduler` 三个接口现在就要留好。
-- **Elo 是否分游戏、是否支持让分？** 建议先按游戏分表，让分功能等有数据再说。
+- **Elo 是否分游戏、是否支持让分？** 已决定按「游戏 + 扩展组合」分榜；
+  让分功能等有数据再说。
 - **观战和回放谁先做？** 建议回放先（几乎白送，重放 action 即可），观战次之。
 - **插件包要不要签名？** 内部上传可先不做，只记录上传人和 sha256；将来要放开再说。

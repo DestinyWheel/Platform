@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import type { GameManifest, LeaderboardEntry } from '@platform/sdk';
+import type { GameManifest, LeaderboardEntry, RatingScopeInfo } from '@platform/sdk';
 import { api } from '../api';
 
 const MODE_LABEL: Record<string, string> = {
@@ -89,6 +89,7 @@ function StartPanel({
   const [picked, setPicked] = useState<Record<string, string>>(() =>
     Object.fromEntries((game.options ?? []).map((group) => [group.key, group.default])),
   );
+  const [expansions, setExpansions] = useState<string[]>([]);
   const [busy, setBusy] = useState<'create' | 'quick' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,6 +103,21 @@ function StartPanel({
     windowStart,
     windowEnd,
     ...(Object.keys(picked).length > 0 ? { options: picked } : {}),
+    ...(expansions.length > 0 ? { expansions } : {}),
+  };
+
+  /** 同组扩展互斥；再点一次已选中的就取消 */
+  const toggleExpansion = (id: string, group?: string): void => {
+    setExpansions((prev) => {
+      if (prev.includes(id)) return prev.filter((item) => item !== id);
+      const next = group
+        ? prev.filter((item) => {
+            const def = (game.expansions ?? []).find((candidate) => candidate.id === item);
+            return def?.group !== group;
+          })
+        : prev;
+      return [...next, id];
+    });
   };
 
   const create = async (): Promise<void> => {
@@ -262,6 +278,28 @@ function StartPanel({
           </div>
         ))}
 
+        {game.expansions && game.expansions.length > 0 ? (
+          <div className="field">
+            <span>扩展</span>
+            <div className="chip-row">
+              {game.expansions.map((expansion) => (
+                <button
+                  key={expansion.id}
+                  type="button"
+                  className={`chip ${expansions.includes(expansion.id) ? 'active' : ''}`}
+                  title={expansion.description}
+                  onClick={() => toggleExpansion(expansion.id, expansion.group)}
+                >
+                  {expansion.name}
+                </button>
+              ))}
+            </div>
+            <p className="muted small">
+              不选就是本体；同组的扩展互斥。扩展与本体分开计算 Elo。
+            </p>
+          </div>
+        ) : null}
+
         <div className="dialog-actions">
           <button className="ghost" onClick={onClose}>
             取消
@@ -292,6 +330,8 @@ export function GameDetail({
   const [tab, setTab] = useState<'intro' | 'board'>('intro');
   const [starting, setStarting] = useState(false);
   const [board, setBoard] = useState<LeaderboardEntry[]>([]);
+  const [scopes, setScopes] = useState<RatingScopeInfo[]>([]);
+  const [ratingScope, setRatingScope] = useState('');
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -344,13 +384,31 @@ export function GameDetail({
   const ranked = game !== null && game.elo !== false;
 
   useEffect(() => {
+    setRatingScope('');
+    setScopes([]);
+    if (!game || game.elo === false) return;
+    let cancelled = false;
+    api
+      .ratingScopes(game.id)
+      .then((data) => {
+        if (!cancelled) setScopes(data.scopes);
+      })
+      .catch(() => {
+        if (!cancelled) setScopes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [game]);
+
+  useEffect(() => {
     if (!game || game.elo === false) {
       setBoard([]);
       return;
     }
     let cancelled = false;
     api
-      .leaderboard(game.id)
+      .leaderboard(game.id, ratingScope)
       .then((data) => {
         if (!cancelled) setBoard(data.entries);
       })
@@ -360,7 +418,7 @@ export function GameDetail({
     return () => {
       cancelled = true;
     };
-  }, [game]);
+  }, [game, ratingScope]);
 
   return (
     <div className="lobby game-detail">
@@ -434,6 +492,23 @@ export function GameDetail({
             </section>
           ) : (
             <section>
+              {scopes.length > 1 ? (
+                <div className="field">
+                  <span>分榜</span>
+                  <div className="chip-row">
+                    {scopes.map((scope) => (
+                      <button
+                        key={scope.value || 'base'}
+                        className={`chip ${ratingScope === scope.value ? 'active' : ''}`}
+                        onClick={() => setRatingScope(scope.value)}
+                      >
+                        {scope.label}
+                        <span className="muted small"> {scope.games} 场</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {board.length === 0 ? (
                 <p className="muted">这个游戏还没有排名。</p>
               ) : (

@@ -3,11 +3,14 @@ import type {
   AnyAction,
   BaseState,
   Effect,
+  GameManifest,
   GamePlugin,
   LogEntry,
   PublicView,
+  RatingScopeInfo,
   ReplayPayload,
   ReplayStep,
+  SelectedExpansionInfo,
   TableSnapshot,
   TableSummary,
 } from '@platform/sdk';
@@ -42,10 +45,67 @@ export class ServiceError extends Error {
   }
 }
 
+/**
+ * 按 manifest 校验、去重并规范化扩展选择。
+ *
+ * - 只接受 manifest 里声明过的 id；
+ * - 同组（例如马赛克水晶的两面）最多选一个；
+ * - 返回 manifest 声明顺序，保证同一组选择的 ratingScope 稳定。
+ */
+function normalizeExpansions(manifest: GameManifest, requested: string[] | undefined): string[] {
+  const defs = manifest.expansions ?? [];
+  if (!requested || requested.length === 0) return [];
+  if (defs.length === 0) {
+    throw new ServiceError('unknown_expansion', '这个游戏没有可选扩展');
+  }
+
+  const byId = new Map(defs.map((item) => [item.id, item]));
+  const picked = new Set<string>();
+  const groups = new Set<string>();
+  for (const id of requested) {
+    const def = byId.get(id);
+    if (!def) throw new ServiceError('unknown_expansion', `未知扩展：${id}`);
+    if (picked.has(id)) continue;
+    if (def.group) {
+      if (groups.has(def.group)) {
+        throw new ServiceError('conflicting_expansion', '同一组扩展只能选择一个');
+      }
+      groups.add(def.group);
+    }
+    picked.add(id);
+  }
+  return defs.filter((def) => picked.has(def.id)).map((def) => def.id);
+}
+
+function expansionInfos(manifest: GameManifest, ids: string[]): SelectedExpansionInfo[] {
+  const byId = new Map((manifest.expansions ?? []).map((item) => [item.id, item]));
+  return ids.map((id) => {
+    const def = byId.get(id);
+    return {
+      id,
+      name: def?.name ?? id,
+      ...(def?.description ? { description: def.description } : {}),
+      ...(def?.group ? { group: def.group } : {}),
+    };
+  });
+}
+
+function expansionLabel(manifest: GameManifest, ratingScope: string): string {
+  if (!ratingScope) return '本体';
+  const byId = new Map((manifest.expansions ?? []).map((item) => [item.id, item]));
+  return ratingScope
+    .split('+')
+    .filter(Boolean)
+    .map((id) => byId.get(id)?.name ?? id)
+    .join(' + ');
+}
+
 export interface CreateTableInput {
   gameId: string;
   maxPlayers?: number;
   options?: Record<string, unknown>;
+  /** 选中的扩展 id；服务端按锁定版本的 manifest 校验并规范化 */
+  expansions?: string[];
   /** 即时制 / 回合制；不填按插件声明的第一个 */
   mode?: 'realtime' | 'turnbased';
   /** 节奏档位；不填用默认 */
@@ -165,6 +225,9 @@ export class TableService {
     const { min, max } = manifest.players;
     const requested = input.maxPlayers ?? max;
     const maxPlayers = Math.max(min, Math.min(max, Math.trunc(requested)));
+    const expansions = normalizeExpansions(manifest, input.expansions);
+    // 分榜键用 id 排序，manifest 顺序变化不会把同一个组合拆成两个榜
+    const ratingScope = [...expansions].sort().join('+');
 
     const now = Date.now();
     const record: TableRecord = {
@@ -178,6 +241,8 @@ export class TableService {
       players: [{ id: user.id, name: displayName(user), seat: 0, bot: false }],
       maxPlayers,
       options: input.options ?? {},
+      expansions,
+      ratingScope,
       state: null,
       seq: 0,
       log: [],
@@ -256,14 +321,23 @@ export class TableService {
   async quickMatch(
     user: UserRecord,
     gameId?: string,
-    settings: Pick<CreateTableInput, 'mode' | 'pace' | 'windowStart' | 'windowEnd'> = {},
+    settings: Pick<
+      CreateTableInput,
+      'mode' | 'pace' | 'windowStart' | 'windowEnd' | 'expansions'
+    > = {},
   ): Promise<{ id: string; created: boolean }> {
     const target = gameId ?? this.host.listActive()[0]?.id;
     if (!target) throw new ServiceError('no_games', '还没有可玩的游戏');
 
-    // 只在同模式的空桌里找：即时制的人不该被塞进一张回合制的桌
+    const active = this.host.activeFor(target);
+    if (!active) throw new ServiceError('unknown_game', `游戏「${target}」当前不可用`);
+    const expansions = normalizeExpansions(active.manifest, settings.expansions);
+    const ratingScope = [...expansions].sort().join('+');
+
+    // 只在同模式、同扩展组合的空桌里找：即时制的人不该被塞进一张回合制的桌，
+    // 想玩本体的人也不该被塞进扩展桌。
     const wantedMode = settings.mode;
-    const open = await this.store.findOpenTable(target);
+    const open = await this.store.findOpenTable(target, ratingScope);
     if (open && (!wantedMode || open.mode === wantedMode)) {
       if (open.players.some((player) => player.id === user.id)) {
         return { id: open.id, created: false };
@@ -277,7 +351,10 @@ export class TableService {
       }
     }
 
-    return { id: await this.createTable(user, { gameId: target, ...settings }), created: true };
+    return {
+      id: await this.createTable(user, { gameId: target, ...settings, expansions }),
+      created: true,
+    };
   }
 
   /**
@@ -393,6 +470,8 @@ export class TableService {
       })),
       maxPlayers: table.maxPlayers,
       options: table.options,
+      expansions: table.expansions,
+      ratingScope: table.ratingScope,
       state: null,
       seq: 0,
       log: [],
@@ -447,6 +526,7 @@ export class TableService {
       const setup = {
         players: table.players.map((player) => player.id),
         options: table.options,
+        expansions: table.expansions,
         // 建局是唯一允许"真随机"的地方；之后一切随机都走 state.rngSeed
         seed,
         now,
@@ -469,7 +549,12 @@ export class TableService {
           actor: userId,
           kind: 'start',
           // 把建局参数一并落库，回放时才能重建出完全相同的初始状态
-          action: { seed, players: setup.players, options: setup.options },
+          action: {
+            seed,
+            players: setup.players,
+            options: setup.options,
+            expansions: setup.expansions,
+          },
           effects,
           stateHash: hashState(state),
         },
@@ -617,7 +702,9 @@ export class TableService {
     if (!table) throw new ServiceError('no_table', '牌桌不存在');
 
     const runtime = await this.runtimeOf(table);
-    const isPlayer = table.players.some((player) => player.id === viewerId);
+    const seat = table.players.find((player) => player.id === viewerId);
+    const isPlayer = seat != null;
+    const isHost = table.hostId === viewerId;
 
     let view: PublicView | null = null;
     let activePlayer: string | null = null;
@@ -653,6 +740,26 @@ export class TableService {
           }
         : null;
 
+    const expansions = expansionInfos(runtime.manifest, table.expansions);
+    const ratingLabel = expansionLabel(runtime.manifest, table.ratingScope);
+    const showExpansionNotice =
+      isPlayer &&
+      !isHost &&
+      !seat?.forfeited &&
+      table.status !== 'finished' &&
+      expansions.length > 0;
+    const expansionNotice =
+      showExpansionNotice &&
+      !(await this.store.hasAckedTableNotice(viewerId, table.id, table.ratingScope))
+        ? {
+            tableId: table.id,
+            gameId: table.gameId,
+            gameVersion: table.gameVersion,
+            key: table.ratingScope,
+            items: expansions,
+          }
+        : null;
+
     return {
       tableId: table.id,
       gameId: table.gameId,
@@ -665,8 +772,11 @@ export class TableService {
       minPlayers: runtime.manifest.players.min,
       maxPlayers: table.maxPlayers,
       options: table.options,
+      expansions,
+      ratingScope: table.ratingScope,
+      ratingLabel,
       players: table.players.map((player) => ({ ...player })),
-      you: { id: viewerId, isPlayer, isHost: table.hostId === viewerId },
+      you: { id: viewerId, isPlayer, isHost },
       view,
       legal,
       legalMoves,
@@ -681,7 +791,25 @@ export class TableService {
       chat,
       viewers: this.presence.viewers(table.id),
       notice,
+      expansionNotice,
     };
+  }
+
+  /**
+   * 非房主玩家确认「本局扩展」提示。
+   * 服务端重新计算 key，不接受客户端自报的任意值。
+   */
+  async ackExpansionNotice(tableId: string, userId: string, key: string): Promise<void> {
+    const table = await this.store.getTable(tableId);
+    if (!table) throw new ServiceError('no_table', '牌桌不存在');
+    const seat = table.players.find((player) => player.id === userId);
+    if (!seat || seat.forfeited) throw new ServiceError('not_seated', '你不在这一桌');
+    if (table.hostId === userId) throw new ServiceError('is_host', '房主不需要确认扩展提示');
+    if (!table.ratingScope || key !== table.ratingScope) {
+      throw new ServiceError('bad_notice', '提示已过期，请刷新');
+    }
+    await this.store.ackTableNotice(userId, table.id, table.ratingScope);
+    this.bus.publish(tableId);
   }
 
   /** 我参与的、还没结束的桌（首页「我的对局」） */
@@ -691,12 +819,18 @@ export class TableService {
   }
 
   private toSummary(table: TableRecord, viewerId?: string): TableSummary {
-    const gameName =
-      this.host.get(table.gameId, table.gameVersion)?.manifest.name ??
-      this.host.activeFor(table.gameId)?.manifest.name ??
-      table.gameId;
+    const manifest =
+      this.host.get(table.gameId, table.gameVersion)?.manifest ??
+      this.host.activeFor(table.gameId)?.manifest;
+    const gameName = manifest?.name ?? table.gameId;
     const host = table.players.find((player) => player.id === table.hostId);
     const seated = viewerId ? table.players.find((player) => player.id === viewerId) : undefined;
+    const expansions = manifest
+      ? expansionInfos(manifest, table.expansions)
+      : table.expansions.map((id) => ({ id, name: id }));
+    const ratingLabel = manifest
+      ? expansionLabel(manifest, table.ratingScope)
+      : table.ratingScope || '本体';
 
     return {
       id: table.id,
@@ -708,6 +842,9 @@ export class TableService {
       maxPlayers: table.maxPlayers,
       hostName: host?.name ?? '—',
       createdAt: table.createdAt,
+      expansions,
+      ratingScope: table.ratingScope,
+      ratingLabel,
       mode: table.mode,
       pace: table.pace,
       friendly: table.friendly,
@@ -764,7 +901,12 @@ export class TableService {
     if (!start) throw new ServiceError('no_replay', '这局还没有可回放的记录');
 
     const setup = start.action as
-      | { seed: number; players: string[]; options?: Record<string, unknown> }
+      | {
+          seed: number;
+          players: string[];
+          options?: Record<string, unknown>;
+          expansions?: string[];
+        }
       | null;
     if (!setup || typeof setup.seed !== 'number') {
       throw new ServiceError('no_replay', '建局记录不完整，无法回放');
@@ -786,6 +928,7 @@ export class TableService {
         await runtime.createState({
           players: setup.players,
           options: setup.options ?? {},
+          expansions: setup.expansions ?? table.expansions,
           seed: setup.seed,
           now: 0,
         })
@@ -834,6 +977,7 @@ export class TableService {
       gameName: runtime.manifest.name,
       gameVersion: table.gameVersion,
       status: table.status,
+      expansions: expansionInfos(runtime.manifest, table.expansions),
       players: table.players.map((player) => ({ ...player })),
       steps,
       truncated,
@@ -841,18 +985,39 @@ export class TableService {
   }
 
   async stats(userId: string): Promise<{
-    perGame: { gameId: string; gameName: string; games: number; wins: number }[];
-    recent: (RecentMatch & { gameName: string })[];
+    perGame: {
+      gameId: string;
+      gameName: string;
+      ratingScope: string;
+      ratingLabel: string;
+      games: number;
+      wins: number;
+    }[];
+    recent: (RecentMatch & { gameName: string; ratingLabel: string })[];
   }> {
     const perGame = await this.store.getUserStats(userId);
     const recent = await this.store.getRecentMatches(userId, 20);
 
-    const nameOf = (gameId: string): string =>
-      this.host.activeFor(gameId)?.manifest.name ?? gameId;
+    const manifestOf = (gameId: string): GameManifest | undefined =>
+      this.host.activeFor(gameId)?.manifest;
 
     return {
-      perGame: perGame.map((row) => ({ ...row, gameName: nameOf(row.gameId) })),
-      recent: recent.map((row) => ({ ...row, gameName: nameOf(row.gameId) })),
+      perGame: perGame.map((row) => {
+        const manifest = manifestOf(row.gameId);
+        return {
+          ...row,
+          gameName: manifest?.name ?? row.gameId,
+          ratingLabel: manifest ? expansionLabel(manifest, row.ratingScope) : row.ratingScope || '本体',
+        };
+      }),
+      recent: recent.map((row) => {
+        const manifest = manifestOf(row.gameId);
+        return {
+          ...row,
+          gameName: manifest?.name ?? row.gameId,
+          ratingLabel: manifest ? expansionLabel(manifest, row.ratingScope) : row.ratingScope || '本体',
+        };
+      }),
     };
   }
 
@@ -882,7 +1047,13 @@ export class TableService {
     });
 
     const finishedAt = table.finishedAt ?? Date.now();
-    await this.store.saveMatchResults(table.id, table.gameId, rows, finishedAt);
+    await this.store.saveMatchResults(
+      table.id,
+      table.gameId,
+      table.ratingScope,
+      rows,
+      finishedAt,
+    );
 
     // 插件声明这个游戏不计 Elo（合作游戏）：战绩照记，分数一分不动
     if (!this.eloEnabled(table.gameId, table.gameVersion)) return;
@@ -892,6 +1063,7 @@ export class TableService {
 
     const current = await this.store.getRatings(
       table.gameId,
+      table.ratingScope,
       rows.map((row) => row.userId),
     );
     const players = rows.map((row) => ({
@@ -904,6 +1076,7 @@ export class TableService {
     const deltas = computeDeltas(players);
     await this.store.applyRatingDeltas(
       table.gameId,
+      table.ratingScope,
       players.map((player) => ({
         userId: player.userId,
         rating: player.rating + (deltas.get(player.userId) ?? 0),
@@ -926,10 +1099,29 @@ export class TableService {
     return manifest?.elo !== false;
   }
 
-  async leaderboard(gameId: string, limit = 20) {
+  async leaderboard(gameId: string, ratingScope = '', limit = 20) {
     // 不计 Elo 的游戏不进排行榜。库里万一还留着老数据也一并挡掉
     if (!this.eloEnabled(gameId)) return [];
-    return this.store.listRatings(gameId, limit);
+    return this.store.listRatings(gameId, ratingScope, limit);
+  }
+
+  /** 某个游戏出现过的 Elo 分榜；本体一定在列表里 */
+  async ratingScopes(gameId: string): Promise<RatingScopeInfo[]> {
+    const manifest = this.host.activeFor(gameId)?.manifest;
+    if (!manifest || manifest.elo === false) return [];
+    const rows = await this.store.listRatingScopes(gameId);
+    const scopes = new Map(rows.map((row) => [row.ratingScope, row.games]));
+    scopes.set('', scopes.get('') ?? 0);
+    const values = [...scopes.keys()].sort((a, b) => {
+      if (a === '') return -1;
+      if (b === '') return 1;
+      return a.localeCompare(b);
+    });
+    return values.map((value) => ({
+      value,
+      label: expansionLabel(manifest, value),
+      games: scopes.get(value) ?? 0,
+    }));
   }
 
   private pushLogs(into: LogEntry[], effects: Effect[], now: number): void {

@@ -392,6 +392,30 @@ test('manifest：elo 字段过得去校验，不写就是计分', async () => {
   await assert.rejects(() => manifestFrom({ ...BASE_MANIFEST, elo: 'no' }), 'elo 只能是布尔');
 });
 
+test('manifest：扩展字段不会被 zod 丢弃，同组由服务端处理', async () => {
+  const parsed = await manifestFrom({
+    ...BASE_MANIFEST,
+    expansions: [
+      { id: 'board-a', name: 'A 面', description: '一种玩法', group: 'board' },
+      { id: 'board-b', name: 'B 面', group: 'board' },
+      { id: 'joker', name: '百搭砖' },
+    ],
+  });
+  assert.equal(parsed.expansions?.length, 3);
+  assert.equal(parsed.expansions?.[0]?.group, 'board');
+  await assert.rejects(
+    () =>
+      manifestFrom({
+        ...BASE_MANIFEST,
+        expansions: [
+          { id: 'same', name: '一' },
+          { id: 'same', name: '二' },
+        ],
+      }),
+    '扩展 id 不能重复',
+  );
+});
+
 test('manifest：纸牌帮关掉 Elo，曼荼罗和骰子照常计分', () => {
   assert.equal(theGang.manifest.elo, false, '合作游戏没有「谁赢」');
   assert.notEqual(mandala.manifest.elo, false);

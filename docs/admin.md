@@ -62,7 +62,8 @@
 
 ### 排行榜
 
-选一个游戏看完整榜单（**包含被隐藏的人**），输入框按账户名或昵称过滤——
+选一个游戏看完整榜单（**包含被隐藏的人**）；如果这个游戏有扩展，再选「分榜」
+（本体 / 各扩展组合）。隐藏是按分榜独立的，不会连带隐藏本体榜。输入框按账户名或昵称过滤——
 `users.name` 可以重复，所以认人靠账户名（`users.account`，全局唯一）或者昵称。
 
 每行末尾一个按钮：
@@ -80,8 +81,8 @@
 |---|---|---|
 | `GET` | `/api/admin/overview` | 概览（监控 + 计数 + worker 列表） |
 | `GET` | `/api/admin/users` | 用户列表（最多 500 条） |
-| `GET` | `/api/admin/ratings?gameId=` | 某个游戏的完整榜单（含隐藏行） |
-| `POST` | `/api/admin/ratings/hide` | `{gameId, userId, hidden}` |
+| `GET` | `/api/admin/ratings?gameId=&ratingScope=` | 某个游戏某个分榜的完整榜单（含隐藏行） |
+| `POST` | `/api/admin/ratings/hide` | `{gameId, ratingScope, userId, hidden}` |
 | `POST` | `/api/admin/users/:id/admin` | `{isAdmin}` |
 | `POST` | `/api/admin/users/:id/password` | `{password?}` → `{password}`（不传就生成） |
 | `GET` | `/api/admin/plugins` | 所有版本 + 内存/在用状态 |

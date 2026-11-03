@@ -149,6 +149,7 @@ const createTableSchema = z.object({
   gameId: z.string().min(1),
   maxPlayers: z.number().int().optional(),
   options: z.record(z.unknown()).optional(),
+  expansions: z.array(z.string().min(1)).max(8).optional(),
   mode: z.enum(['realtime', 'turnbased']).optional(),
   pace: z.string().min(1).max(8).optional(),
   /** 每日可行动时段，UTC 当天第几分钟 */
@@ -409,12 +410,20 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   });
 
   /** 某个游戏的完整榜单（含被隐藏的），管理端用 */
-  app.get<{ Querystring: { gameId?: string } }>('/api/admin/ratings', async (request) => {
-    await requireAdmin(request);
-    const gameId = request.query.gameId;
-    if (!gameId) throw new ServiceError('invalid_input', '需要 gameId 参数');
-    return { gameId, rows: await store.listAdminRatings(gameId, 300) };
-  });
+  app.get<{ Querystring: { gameId?: string; ratingScope?: string } }>(
+    '/api/admin/ratings',
+    async (request) => {
+      await requireAdmin(request);
+      const gameId = request.query.gameId;
+      if (!gameId) throw new ServiceError('invalid_input', '需要 gameId 参数');
+      const ratingScope = request.query.ratingScope ?? '';
+      return {
+        gameId,
+        ratingScope,
+        rows: await store.listAdminRatings(gameId, ratingScope, 300),
+      };
+    },
+  );
 
   /** 把某人从这个游戏的榜上藏掉（整行不显示、名次顺延），或者放回来 */
   app.post('/api/admin/ratings/hide', async (request) => {
@@ -422,13 +431,20 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const input = z
       .object({
         gameId: z.string().min(1),
+        ratingScope: z.string().optional(),
         userId: z.string().min(1),
         hidden: z.boolean(),
       })
       .parse(request.body);
 
-    const ok = await store.setRatingHidden(input.gameId, input.userId, input.hidden, admin.id);
-    if (!ok) throw new ServiceError('not_found', '这个人在这个游戏上还没有分数');
+    const ok = await store.setRatingHidden(
+      input.gameId,
+      input.ratingScope ?? '',
+      input.userId,
+      input.hidden,
+      admin.id,
+    );
+    if (!ok) throw new ServiceError('not_found', '这个人在这个分榜上还没有分数');
     request.log.info({ admin: admin.id, ...input }, '排行榜隐藏');
     return { ok: true };
   });
@@ -672,7 +688,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     if (!user) throw new ServiceError('not_found', '这个用户不存在');
 
     const [stats, counts, follow, followedBy, block, unlocked] = await Promise.all([
-      store.getUserStats(user.id),
+      service.stats(user.id).then((result) => result.perGame),
       store.countFollows(user.id),
       store.getFollow(me.id, user.id),
       store.isFollowing(user.id, me.id),
@@ -688,10 +704,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
         avatar: user.avatar,
         createdAt: user.createdAt,
         signature: user.signature,
-        stats: stats.map((row) => ({
-          ...row,
-          gameName: host.activeFor(row.gameId)?.manifest.name ?? row.gameId,
-        })),
+        stats,
         // 成就的定义（名字、图标、颜色）全部来自插件自己的 manifest
         achievements: unlocked.flatMap((row) => {
           const manifest = host.activeFor(row.gameId)?.manifest;
@@ -1097,6 +1110,14 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     return { ok: true };
   });
 
+  /** 本局扩展提示已读：非房主玩家确认一次 */
+  app.post<{ Params: { id: string } }>('/api/tables/:id/notices/ack', async (request) => {
+    const user = await requireUser(request);
+    const input = z.object({ key: z.string().min(1) }).parse(request.body);
+    await service.ackExpansionNotice(request.params.id, user.id, input.key);
+    return { ok: true };
+  });
+
   app.get('/api/games', async () => ({ games: host.listActive() }));
 
   app.get('/api/tables', async () => ({ tables: await service.summaries() }));
@@ -1150,6 +1171,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
   app.post<{
     Body: {
       gameId?: string;
+      expansions?: string[];
       mode?: 'realtime' | 'turnbased';
       pace?: string;
       windowStart?: number | null;
@@ -1161,6 +1183,7 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     const body = request.body ?? {};
     const gameId = typeof body.gameId === 'string' ? body.gameId : undefined;
     const result = await service.quickMatch(user, gameId, {
+      ...(Array.isArray(body.expansions) ? { expansions: body.expansions } : {}),
       ...(body.mode ? { mode: body.mode } : {}),
       ...(body.pace ? { pace: body.pace } : {}),
       windowStart: body.windowStart ?? null,
@@ -1235,11 +1258,25 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     return await service.stats(user.id);
   });
 
-  app.get<{ Querystring: { gameId?: string } }>('/api/leaderboard', async (request) => {
+  app.get<{ Querystring: { gameId?: string; ratingScope?: string } }>(
+    '/api/leaderboard',
+    async (request) => {
+      await requireUser(request);
+      const gameId = request.query.gameId;
+      if (!gameId) throw new ServiceError('invalid_input', '需要 gameId 参数');
+      const ratingScope = request.query.ratingScope ?? '';
+      return {
+        gameId,
+        ratingScope,
+        entries: await service.leaderboard(gameId, ratingScope),
+      };
+    },
+  );
+
+  /** 某个游戏已经产生过评分的范围，供排行榜选择器使用 */
+  app.get<{ Params: { id: string } }>('/api/games/:id/rating-scopes', async (request) => {
     await requireUser(request);
-    const gameId = request.query.gameId;
-    if (!gameId) throw new ServiceError('invalid_input', '需要 gameId 参数');
-    return { gameId, entries: await service.leaderboard(gameId) };
+    return { scopes: await service.ratingScopes(request.params.id) };
   });
 
   /* --------------------------- 管理后台 --------------------------- */

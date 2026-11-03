@@ -68,6 +68,10 @@ export interface TableRecord {
   players: TablePlayer[];
   maxPlayers: number;
   options: Record<string, unknown>;
+  /** 本桌选中的扩展 id（按 manifest 顺序） */
+  expansions: string[];
+  /** Elo 分榜键：本体为 ''，扩展组合为 id+id */
+  ratingScope: string;
   state: BaseState | null;
   /** 单调递增。既是给客户端的版本号，也是 CAS 的期望值 */
   seq: number;
@@ -262,8 +266,8 @@ export interface Store {
   listTables(): Promise<TableRecord[]>;
   /** 按房间码找桌（6 位，大小写不敏感） */
   findTableByCode(code: string): Promise<TableRecord | undefined>;
-  /** 随机加入：找一张等待中、还坐得下人的桌 */
-  findOpenTable(gameId?: string): Promise<TableRecord | undefined>;
+  /** 随机加入：找一张等待中、还坐得下人的桌；scope 必须完全一致 */
+  findOpenTable(gameId?: string, ratingScope?: string): Promise<TableRecord | undefined>;
   /** 我参与的、还没结束的桌 */
   listMyTables(userId: string, limit: number): Promise<TableRecord[]>;
   /** 已到期需要代走的桌（只取 status='playing'） */
@@ -277,6 +281,8 @@ export interface Store {
   ): Promise<{ seq: number; state: unknown } | undefined>;
   hasAckedVersion(userId: string, gameId: string, version: string): Promise<boolean>;
   ackVersion(userId: string, gameId: string, version: string): Promise<void>;
+  hasAckedTableNotice(userId: string, tableId: string, key: string): Promise<boolean>;
+  ackTableNotice(userId: string, tableId: string, key: string): Promise<void>;
 
   /* ------------------------- 插件版本 ------------------------- */
   getGameVersion(gameId: string, version: string): Promise<GameVersionRecord | undefined>;
@@ -303,10 +309,13 @@ export interface Store {
   saveMatchResults(
     tableId: string,
     gameId: string,
+    ratingScope: string,
     rows: { userId: string; rank: number; players: number; isWin: boolean }[],
     finishedAt: number,
   ): Promise<void>;
-  getUserStats(userId: string): Promise<{ gameId: string; games: number; wins: number }[]>;
+  getUserStats(
+    userId: string,
+  ): Promise<{ gameId: string; ratingScope: string; games: number; wins: number }[]>;
   getRecentMatches(userId: string, limit: number): Promise<RecentMatch[]>;
   /** 这一桌是否已经结算过（防止重复计分） */
   hasMatchResults(tableId: string): Promise<boolean>;
@@ -314,21 +323,32 @@ export interface Store {
   /* ------------------------- Elo ------------------------- */
   getRatings(
     gameId: string,
+    ratingScope: string,
     userIds: string[],
   ): Promise<Map<string, { rating: number; games: number }>>;
   applyRatingDeltas(
     gameId: string,
+    ratingScope: string,
     rows: { userId: string; rating: number; games: number }[],
     now: number,
   ): Promise<void>;
   listRatings(
     gameId: string,
+    ratingScope: string,
     limit: number,
   ): Promise<{ userId: string; name: string; rating: number; games: number }[]>;
+  /** 某个游戏已经产生过评分的分榜范围（本体 + 扩展组合） */
+  listRatingScopes(gameId: string): Promise<{ ratingScope: string; games: number }[]>;
   /** 管理端：含被隐藏的行 */
-  listAdminRatings(gameId: string, limit: number): Promise<AdminRatingRow[]>;
-  /** 从某个游戏的榜上隐藏 / 恢复某人 */
-  setRatingHidden(gameId: string, userId: string, hidden: boolean, by: string): Promise<boolean>;
+  listAdminRatings(gameId: string, ratingScope: string, limit: number): Promise<AdminRatingRow[]>;
+  /** 从某个游戏某个分榜上隐藏 / 恢复某人 */
+  setRatingHidden(
+    gameId: string,
+    ratingScope: string,
+    userId: string,
+    hidden: boolean,
+    by: string,
+  ): Promise<boolean>;
 
   /* ------------------------- 备份 / 恢复 ------------------------- */
   exportAll(): Promise<Record<string, Record<string, unknown>[]>>;
@@ -493,6 +513,7 @@ export interface ActionRow {
 export interface RecentMatch {
   tableId: string;
   gameId: string;
+  ratingScope: string;
   rank: number;
   players: number;
   isWin: boolean;
@@ -522,6 +543,8 @@ interface TableRow {
   players: TablePlayer[];
   max_players: number;
   options: Record<string, unknown>;
+  expansions: string[];
+  rating_scope: string;
   state: BaseState | null;
   seq: number;
   log: LogEntry[];
@@ -550,6 +573,8 @@ function toRecord(row: TableRow): TableRecord {
     players: row.players,
     maxPlayers: Number(row.max_players),
     options: row.options ?? {},
+    expansions: Array.isArray(row.expansions) ? row.expansions : [],
+    ratingScope: row.rating_scope ?? '',
     state: row.state,
     seq: Number(row.seq),
     log: row.log ?? [],
@@ -830,9 +855,10 @@ export class PgStore implements Store {
       `INSERT INTO tables
          (id, code, game_id, game_version, host_id, status, players, max_players, options,
           state, seq, log, deadline_at, created_at, started_at, finished_at, result,
-          mode, pace, turn_ms, window_start, window_end, timeout_streak, friendly)
+          mode, pace, turn_ms, window_start, window_end, timeout_streak, friendly,
+          expansions, rating_scope)
        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10::jsonb,$11,$12::jsonb,$13,$14,$15,$16,$17::jsonb,
-               $18,$19,$20,$21,$22,$23,$24)`,
+               $18,$19,$20,$21,$22,$23,$24,$25::jsonb,$26)`,
       [
         record.id,
         record.code,
@@ -858,6 +884,8 @@ export class PgStore implements Store {
         record.windowEnd,
         record.timeoutStreak,
         record.friendly,
+        JSON.stringify(record.expansions),
+        record.ratingScope,
       ],
     );
   }
@@ -954,16 +982,18 @@ export class PgStore implements Store {
     return row ? toRecord(row) : undefined;
   }
 
-  async findOpenTable(gameId?: string): Promise<TableRecord | undefined> {
-    // 只找还能坐人的等待中牌桌；老桌（code 为 null）也算，照样能坐下
+  async findOpenTable(gameId?: string, ratingScope = ''): Promise<TableRecord | undefined> {
+    // 只找还能坐人的等待中牌桌；扩展组合必须完全一致，
+    // 否则“随便来一局”会把想玩本体的人塞进扩展桌。
     const rows = await this.db.query<TableRow>(
       `SELECT * FROM tables
         WHERE status = 'lobby'
           AND jsonb_array_length(players) < max_players
           AND ($1::text IS NULL OR game_id = $1)
+          AND rating_scope = $2
         ORDER BY created_at ASC
         LIMIT 1`,
-      [gameId ?? null],
+      [gameId ?? null, ratingScope],
     );
     const row = rows[0];
     return row ? toRecord(row) : undefined;
@@ -1007,6 +1037,22 @@ export class PgStore implements Store {
       `INSERT INTO version_acks (user_id, game_id, version, acked_at)
        VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
       [userId, gameId, version, Date.now()],
+    );
+  }
+
+  async hasAckedTableNotice(userId: string, tableId: string, key: string): Promise<boolean> {
+    const rows = await this.db.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM table_notice_acks WHERE user_id = $1 AND table_id = $2 AND notice_key = $3',
+      [userId, tableId, key],
+    );
+    return Number(rows[0]?.n ?? 0) > 0;
+  }
+
+  async ackTableNotice(userId: string, tableId: string, key: string): Promise<void> {
+    await this.db.execute(
+      `INSERT INTO table_notice_acks (user_id, table_id, notice_key, acked_at)
+       VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+      [userId, tableId, key, Date.now()],
     );
   }
 
@@ -1166,32 +1212,41 @@ export class PgStore implements Store {
   async saveMatchResults(
     tableId: string,
     gameId: string,
+    ratingScope: string,
     rows: { userId: string; rank: number; players: number; isWin: boolean }[],
     finishedAt: number,
   ): Promise<void> {
     for (const row of rows) {
       await this.db.execute(
-        `INSERT INTO match_results (table_id, user_id, game_id, rank, players, is_win, finished_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `INSERT INTO match_results (table_id, user_id, game_id, rating_scope, rank, players, is_win, finished_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (table_id, user_id) DO NOTHING`,
-        [tableId, row.userId, gameId, row.rank, row.players, row.isWin, finishedAt],
+        [tableId, row.userId, gameId, ratingScope, row.rank, row.players, row.isWin, finishedAt],
       );
     }
   }
 
-  async getUserStats(userId: string): Promise<{ gameId: string; games: number; wins: number }[]> {
-    const rows = await this.db.query<{ game_id: string; games: number; wins: number }>(
-      `SELECT game_id,
+  async getUserStats(
+    userId: string,
+  ): Promise<{ gameId: string; ratingScope: string; games: number; wins: number }[]> {
+    const rows = await this.db.query<{
+      game_id: string;
+      rating_scope: string;
+      games: number;
+      wins: number;
+    }>(
+      `SELECT game_id, rating_scope,
               count(*)::int AS games,
               sum(CASE WHEN is_win THEN 1 ELSE 0 END)::int AS wins
          FROM match_results
         WHERE user_id = $1
-        GROUP BY game_id
+        GROUP BY game_id, rating_scope
         ORDER BY games DESC`,
       [userId],
     );
     return rows.map((row) => ({
       gameId: row.game_id,
+      ratingScope: row.rating_scope ?? '',
       games: Number(row.games),
       wins: Number(row.wins),
     }));
@@ -1201,18 +1256,20 @@ export class PgStore implements Store {
     const rows = await this.db.query<{
       table_id: string;
       game_id: string;
+      rating_scope: string;
       rank: number;
       players: number;
       is_win: boolean;
       finished_at: number;
     }>(
-      `SELECT table_id, game_id, rank, players, is_win, finished_at
+      `SELECT table_id, game_id, rating_scope, rank, players, is_win, finished_at
          FROM match_results WHERE user_id = $1 ORDER BY finished_at DESC LIMIT $2`,
       [userId, limit],
     );
     return rows.map((row) => ({
       tableId: row.table_id,
       gameId: row.game_id,
+      ratingScope: row.rating_scope ?? '',
       rank: Number(row.rank),
       players: Number(row.players),
       isWin: Boolean(row.is_win),
@@ -1232,14 +1289,16 @@ export class PgStore implements Store {
 
   async getRatings(
     gameId: string,
+    ratingScope: string,
     userIds: string[],
   ): Promise<Map<string, { rating: number; games: number }>> {
     const result = new Map<string, { rating: number; games: number }>();
     if (userIds.length === 0) return result;
 
     const rows = await this.db.query<{ user_id: string; rating: number; games: number }>(
-      'SELECT user_id, rating, games FROM ratings WHERE game_id = $1 AND user_id = ANY($2::text[])',
-      [gameId, userIds],
+      `SELECT user_id, rating, games FROM ratings
+        WHERE game_id = $1 AND rating_scope = $2 AND user_id = ANY($3::text[])`,
+      [gameId, ratingScope, userIds],
     );
     for (const row of rows) {
       result.set(row.user_id, { rating: Number(row.rating), games: Number(row.games) });
@@ -1249,22 +1308,24 @@ export class PgStore implements Store {
 
   async applyRatingDeltas(
     gameId: string,
+    ratingScope: string,
     rows: { userId: string; rating: number; games: number }[],
     now: number,
   ): Promise<void> {
     for (const row of rows) {
       await this.db.execute(
-        `INSERT INTO ratings (game_id, user_id, rating, games, updated_at)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (game_id, user_id) DO UPDATE SET
+        `INSERT INTO ratings (game_id, rating_scope, user_id, rating, games, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (game_id, rating_scope, user_id) DO UPDATE SET
            rating = EXCLUDED.rating, games = EXCLUDED.games, updated_at = EXCLUDED.updated_at`,
-        [gameId, row.userId, row.rating, row.games, now],
+        [gameId, ratingScope, row.userId, row.rating, row.games, now],
       );
     }
   }
 
   async listRatings(
     gameId: string,
+    ratingScope: string,
     limit: number,
   ): Promise<{ userId: string; name: string; rating: number; games: number }[]> {
     const rows = await this.db.query<{
@@ -1277,10 +1338,10 @@ export class PgStore implements Store {
     }>(
       `SELECT r.user_id, u.name, u.account, u.avatar, r.rating, r.games
          FROM ratings r JOIN users u ON u.id = r.user_id
-        WHERE r.game_id = $1 AND NOT r.hidden
+        WHERE r.game_id = $1 AND r.rating_scope = $2 AND NOT r.hidden
         ORDER BY r.rating DESC, r.games DESC
-        LIMIT $2`,
-      [gameId, limit],
+        LIMIT $3`,
+      [gameId, ratingScope, limit],
     );
     return rows.map((row) => ({
       userId: row.user_id,
@@ -1290,8 +1351,27 @@ export class PgStore implements Store {
     }));
   }
 
+  async listRatingScopes(gameId: string): Promise<{ ratingScope: string; games: number }[]> {
+    const rows = await this.db.query<{ rating_scope: string; games: number }>(
+      `SELECT rating_scope, sum(games)::int AS games
+         FROM ratings
+        WHERE game_id = $1
+        GROUP BY rating_scope
+        ORDER BY rating_scope ASC`,
+      [gameId],
+    );
+    return rows.map((row) => ({
+      ratingScope: row.rating_scope ?? '',
+      games: Number(row.games),
+    }));
+  }
+
   /** 管理端：包含被隐藏的行，用于"谁在这个榜上、谁被藏了" */
-  async listAdminRatings(gameId: string, limit: number): Promise<AdminRatingRow[]> {
+  async listAdminRatings(
+    gameId: string,
+    ratingScope: string,
+    limit: number,
+  ): Promise<AdminRatingRow[]> {
     const rows = await this.db.query<{
       user_id: string;
       name: string;
@@ -1303,10 +1383,10 @@ export class PgStore implements Store {
     }>(
       `SELECT r.user_id, u.name, u.account, u.avatar, r.rating, r.games, r.hidden
          FROM ratings r JOIN users u ON u.id = r.user_id
-        WHERE r.game_id = $1
+        WHERE r.game_id = $1 AND r.rating_scope = $2
         ORDER BY r.hidden ASC, r.rating DESC, r.games DESC
-        LIMIT $2`,
-      [gameId, limit],
+        LIMIT $3`,
+      [gameId, ratingScope, limit],
     );
     return rows.map((row) => ({
       userId: row.user_id,
@@ -1320,18 +1400,19 @@ export class PgStore implements Store {
 
   async setRatingHidden(
     gameId: string,
+    ratingScope: string,
     userId: string,
     hidden: boolean,
     by: string,
   ): Promise<boolean> {
     const rows = await this.db.query<{ user_id: string }>(
       `UPDATE ratings
-          SET hidden = $3::boolean,
-              hidden_by = CASE WHEN $3::boolean THEN $4::text ELSE NULL END,
-              hidden_at = CASE WHEN $3::boolean THEN $4::bigint ELSE NULL END
-        WHERE game_id = $1 AND user_id = $2
+          SET hidden = $4::boolean,
+              hidden_by = CASE WHEN $4::boolean THEN $5::text ELSE NULL END,
+              hidden_at = CASE WHEN $4::boolean THEN $5::bigint ELSE NULL END
+        WHERE game_id = $1 AND rating_scope = $2 AND user_id = $3
       RETURNING user_id`,
-      [gameId, userId, hidden, hidden ? Date.now() : null],
+      [gameId, ratingScope, userId, hidden, hidden ? Date.now() : null],
     );
     return rows.length > 0;
   }
@@ -2078,6 +2159,7 @@ const DUMP_TABLES = [
   'match_results',
   'ratings',
   'version_acks',
+  'table_notice_acks',
   'follow_groups',
   'follows',
   'blocks',

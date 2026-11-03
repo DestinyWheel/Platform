@@ -52,6 +52,19 @@ const manifestSchema = z
       )
       .max(4)
       .optional(),
+    /** 可选扩展模块：开桌时选择，Elo 按实际组合分榜 */
+    expansions: z
+      .array(
+        z.object({
+          id: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/, '扩展 id 只能用小写字母/数字/连字符'),
+          name: z.string().trim().min(1).max(60),
+          description: z.string().trim().max(200).optional(),
+          /** 同组互斥；例如同一扩展的不同板面 */
+          group: z.string().trim().min(1).max(32).optional(),
+        }),
+      )
+      .max(8)
+      .optional(),
     /** 牌桌界面偏好 */
     ui: z.object({ hideLog: z.boolean().optional() }).optional(),
     /** 要不要 Elo / 排行榜；合作游戏写 false，平台就不给它算分、也不摆排行榜 */
@@ -79,7 +92,14 @@ const manifestSchema = z
   })
   .refine((manifest) => manifest.players.max >= manifest.players.min, {
     message: 'players.max 不能小于 players.min',
-  });
+  })
+  .refine(
+    (manifest) => {
+      const ids = (manifest.expansions ?? []).map((item) => item.id);
+      return new Set(ids).size === ids.length;
+    },
+    { message: '扩展 id 不能重复' },
+  );
 
 export interface PublishDeps {
   store: Store;

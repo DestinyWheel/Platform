@@ -99,9 +99,17 @@ export function TableView({
   const [busy, setBusy] = useState<string | null>(null);
   /** 已经点过"我知道了"的版本；服务端也会记，这里只是让弹窗立刻消失 */
   const [ackedVersion, setAckedVersion] = useState<string | null>(null);
+  /** 本桌扩展提示：本地立即隐藏，服务端按（用户, 桌, 扩展组合）持久化 */
+  const [ackedExpansion, setAckedExpansion] = useState<string | null>(null);
   /** 开局前：最近一起玩过的人，一键邀请 */
   const [recentPlayers, setRecentPlayers] = useState<RecentPlayer[]>([]);
   const [invited, setInvited] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    // 从一张桌切到另一张桌时，旧桌的已读状态不能沿用
+    setAckedVersion(null);
+    setAckedExpansion(null);
+  }, [tableId]);
 
   useEffect(() => {
     if (snapshot?.status !== 'lobby' || !snapshot.you.isPlayer) return;
@@ -243,6 +251,13 @@ export function TableView({
     await api.ackNotice(snapshot.notice.gameId, snapshot.notice.version).catch(() => undefined);
   };
 
+  const acknowledgeExpansion = async (): Promise<void> => {
+    if (!snapshot?.expansionNotice) return;
+    const key = snapshot.expansionNotice.key;
+    setAckedExpansion(key);
+    await api.ackExpansionNotice(tableId, key).catch(() => undefined);
+  };
+
   if (!snapshot) {
     return <div className="center">{error ?? '连接中…'}</div>;
   }
@@ -252,6 +267,13 @@ export function TableView({
   const canJoin = !snapshot.you.isPlayer && snapshot.status === 'lobby';
   const message = actionError ?? error ?? clientError;
   const notice = snapshot.notice && snapshot.notice.version !== ackedVersion ? snapshot.notice : null;
+  // 先版本公告、后扩展提示；两个字段同属一份快照，确认版本后无需等服务端再推
+  const expansionNotice =
+    !notice &&
+    snapshot.expansionNotice &&
+    snapshot.expansionNotice.key !== ackedExpansion
+      ? snapshot.expansionNotice
+      : null;
   /** 能叫的人：最近一起玩过的、又不在这一桌的（一个都不剩就别留个空标题） */
   const callable = recentPlayers
     .filter((person) => !snapshot.players.some((player) => player.id === person.id))
@@ -273,6 +295,11 @@ export function TableView({
           {snapshot.gameName}
           <span className="muted version">v{snapshot.gameVersion}</span>
           {snapshot.code ? <span className="room-code">{snapshot.code}</span> : null}
+          {snapshot.expansions.length > 0 ? (
+            <span className="badge" title="本局使用的扩展">
+              {snapshot.ratingLabel}
+            </span>
+          ) : null}
           <span className="badge">{snapshot.mode === 'realtime' ? '即时' : '回合制'}</span>
           {snapshot.friendly ? <span className="badge">友谊赛 · 不计分</span> : null}
           <span className={`badge ${snapshot.status}`}>{STATUS_LABEL[snapshot.status]}</span>
@@ -511,6 +538,32 @@ export function TableView({
             <p className="muted small">这条公告每个版本只弹一次。</p>
             <div className="dialog-actions">
               <button className="primary" onClick={() => void acknowledge()}>
+                我知道了
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {expansionNotice ? (
+        <div className="backdrop">
+          <div className="dialog">
+            <h2>本局使用的扩展</h2>
+            <ul className="notice-list">
+              {expansionNotice.items.map((item) => (
+                <li key={item.id}>
+                  <strong>{item.name}</strong>
+                  {item.description ? (
+                    <span className="muted small">：{item.description}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <p className="muted small">
+              这局与本体分开计算 Elo；扩展选择在开桌时确定，不会中途改变。
+            </p>
+            <div className="dialog-actions">
+              <button className="primary" onClick={() => void acknowledgeExpansion()}>
                 我知道了
               </button>
             </div>

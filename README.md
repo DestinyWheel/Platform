@@ -75,6 +75,7 @@ tests/
 | 曼荼罗 | 双人卡牌，规则移植自 Lua 实现，含隐藏信息 / 结算子流程。见 [docs/mandala.md](docs/mandala.md) |
 | 璀璨宝石：对决 | 双人卡牌，67 张 Jewel 卡 + 4 张 Royal；预购牌有可见窗口。见 [docs/splendor-duel.md](docs/splendor-duel.md) |
 | 花砖物语：对决 | 双人五轮，工厂抢砖 / 图案行 / 穹顶计分。见 [docs/azul-duel.md](docs/azul-duel.md) |
+| 花砖物语 | 2–4 人基础版，工厂 / 中央 / 图案行 / 5×5 墙；含马赛克水晶、百搭砖、特殊工厂。见 [docs/azul.md](docs/azul.md) |
 | 土耳其麻将 · Okey 101 | 2–4 人 101 Okey，破冰、拆牌重组、多轮累计。见 [docs/okey-101.md](docs/okey-101.md) |
 
 ## 玩起来之后
@@ -94,6 +95,7 @@ tests/
 | Elo | 每人每个游戏一个分数，默认 1500，零和；开桌时 `ranked: false` 可打休闲局不计分；插件写 `elo: false` 的游戏整个不算分（合作游戏），大厅排行榜和详情页都不出现它 |
 | 人机 | 大厅勾选「补一个机器人」即可单人开局；机器人走和真人完全相同的动作通道，只是不产生战绩与 Elo |
 | 人数 | 游戏在 manifest 里声明 `players: {min,max}`，开桌时选座位数；只要够 `min` 人就能开，不用坐满 |
+| 扩展 | 插件声明 `expansions`，开房前选择；非房主玩家进桌会在版本公告后看到本局扩展；同组互斥、可组合，Elo 按实际组合分榜。见 [docs/extensions.md](docs/extensions.md) |
 | 账户 | 全局唯一、登录用它、注册后不可改；昵称只是展示，可以重复、随时改 |
 | 头像 / 签名 | 10 个预设头像随便挑（上传能力已写好，`AVATAR_UPLOAD=1` 才开放）；一句话签名 |
 | 关注 | 单向关注 + 分组（自己命名、可删可改名）+ 特别关注（置顶、提醒不折叠） |
@@ -152,7 +154,7 @@ pnpm --filter @platform/server start   # 或者 node_modules/.bin/tsx apps/serve
 
 ## 加一个游戏
 
-1. 复制 `games/dice` 到 `games/<你的游戏>`，改 `manifest.json`（id / 版本 / 人数）
+1. 复制 `games/dice` 到 `games/<你的游戏>`，改 `manifest.json`（id / 版本 / 人数；有扩展时声明 `expansions`，见 [docs/extensions.md](docs/extensions.md)）
 2. 写 `src/server.ts`（`GamePlugin`：状态机 + 纯 reducer + 视图裁剪；动作带参数时建议实现 `legalMoves`，UI 才能精确高亮）
 3. 写 `src/client.ts`（`GameClient`：`mount` / `update` / `unmount`，可以是原生 DOM、Canvas 或任意框架）
 4. 重启 `pnpm dev`（开发态自动发布），或者 `pnpm pack:game games/xxx` 后到后台 `POST /api/admin/plugins` 上传

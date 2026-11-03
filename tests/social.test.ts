@@ -262,6 +262,7 @@ test('隐藏某人：榜上不再出现，放回来就回来', async () => {
   const gameId = 'demo-game';
   await store.applyRatingDeltas(
     gameId,
+    '',
     [
       { userId: p1.id, rating: 1600, games: 3 },
       { userId: p2.id, rating: 1500, games: 3 },
@@ -269,26 +270,123 @@ test('隐藏某人：榜上不再出现，放回来就回来', async () => {
     Date.now(),
   );
 
-  let board = await store.listRatings(gameId, 10);
+  let board = await store.listRatings(gameId, '', 10);
   assert.equal(board.length, 2);
   assert.equal(board[0]!.name, p1.name, '榜上显示昵称');
 
-  assert.equal(await store.setRatingHidden(gameId, p1.id, true, p2.id), true);
+  assert.equal(await store.setRatingHidden(gameId, '', p1.id, true, p2.id), true);
 
-  board = await store.listRatings(gameId, 10);
+  board = await store.listRatings(gameId, '', 10);
   assert.deepEqual(
     board.map((row) => row.userId),
     [p2.id],
     '被隐藏的人整行不出现，名次自然顺延',
   );
 
-  const adminRows = await store.listAdminRatings(gameId, 10);
+  const adminRows = await store.listAdminRatings(gameId, '', 10);
   assert.equal(adminRows.length, 2, '管理端还看得到被隐藏的那行');
   assert.equal(adminRows.find((row) => row.userId === p1.id)?.hidden, true);
 
-  await store.setRatingHidden(gameId, p1.id, false, p2.id);
-  board = await store.listRatings(gameId, 10);
+  await store.setRatingHidden(gameId, '', p1.id, false, p2.id);
+  board = await store.listRatings(gameId, '', 10);
   assert.equal(board.length, 2, '放回来就重新出现');
+});
+
+test('Elo 分榜：本体与扩展各自独立，隐藏也互不影响', async () => {
+  const p1 = await store.createUser('acct31', '本体强', 'h');
+  const p2 = await store.createUser('acct32', '扩展强', 'h');
+  assert.ok(p1 && p2);
+  const gameId = 'split-game';
+
+  await store.applyRatingDeltas(
+    gameId,
+    '',
+    [
+      { userId: p1.id, rating: 1700, games: 2 },
+      { userId: p2.id, rating: 1500, games: 2 },
+    ],
+    Date.now(),
+  );
+  await store.applyRatingDeltas(
+    gameId,
+    'joker+board-a',
+    [
+      { userId: p1.id, rating: 1450, games: 1 },
+      { userId: p2.id, rating: 1600, games: 1 },
+    ],
+    Date.now(),
+  );
+
+  const base = await store.listRatings(gameId, '', 10);
+  const expanded = await store.listRatings(gameId, 'joker+board-a', 10);
+  assert.equal(base[0]!.userId, p1.id, '本体榜互不污染');
+  assert.equal(expanded[0]!.userId, p2.id, '扩展榜各算各的');
+  assert.deepEqual(
+    (await store.listRatingScopes(gameId)).map((row) => row.ratingScope),
+    ['', 'joker+board-a'],
+  );
+
+  await store.setRatingHidden(gameId, '', p1.id, true, p2.id);
+  assert.equal((await store.listRatings(gameId, '', 10)).length, 1);
+  assert.equal(
+    (await store.listRatings(gameId, 'joker+board-a', 10)).length,
+    2,
+    '隐藏本体榜不影响扩展榜',
+  );
+});
+
+test('桌级提示已读：每桌每人每 key 一次', async () => {
+  const a = await store.createUser('acct33', '甲', 'h');
+  const b = await store.createUser('acct34', '乙', 'h');
+  assert.ok(a && b);
+  assert.equal(await store.hasAckedTableNotice(a.id, 't1', 'joker'), false);
+  await store.ackTableNotice(a.id, 't1', 'joker');
+  assert.equal(await store.hasAckedTableNotice(a.id, 't1', 'joker'), true);
+  assert.equal(await store.hasAckedTableNotice(a.id, 't1', 'board'), false);
+  assert.equal(await store.hasAckedTableNotice(b.id, 't1', 'joker'), false);
+  // 幂等，不重复插入
+  await store.ackTableNotice(a.id, 't1', 'joker');
+});
+
+test('快速匹配范围：本体桌和扩展桌不会互相匹配', async () => {
+  const me = await store.createUser('acct35', '范围测试', 'h');
+  assert.ok(me);
+  const base = {
+    gameId: 'dice',
+    gameVersion: '0.1.0',
+    hostId: me.id,
+    status: 'lobby' as const,
+    maxPlayers: 4,
+    options: {},
+    expansions: [] as string[],
+    ratingScope: '',
+    state: null,
+    seq: 0,
+    log: [],
+    deadlineAt: null,
+    mode: 'turnbased' as const,
+    pace: '1',
+    turnMs: 86_400_000,
+    windowStart: null,
+    windowEnd: null,
+    timeoutStreak: 0,
+    friendly: false,
+    createdAt: 1,
+    startedAt: null,
+    finishedAt: null,
+    result: null,
+    players: [{ id: me.id, name: me.name, seat: 0, bot: false }],
+  };
+  await store.createTable({ ...base, id: 'base-table', code: 'CCCCCC' });
+  await store.createTable({
+    ...base,
+    id: 'joker-table',
+    code: 'DDDDDD',
+    expansions: ['joker-tiles'],
+    ratingScope: 'joker-tiles',
+  });
+  assert.equal((await store.findOpenTable('dice', ''))?.id, 'base-table');
+  assert.equal((await store.findOpenTable('dice', 'joker-tiles'))?.id, 'joker-table');
 });
 
 /* ------------------------------ 提醒 ------------------------------ */
@@ -369,6 +467,8 @@ test('最近一起玩过：按同桌时间倒序，机器人不算人', async ()
     status: 'finished' as const,
     maxPlayers: 4,
     options: {},
+    expansions: [],
+    ratingScope: '',
     state: null,
     seq: 1,
     log: [],

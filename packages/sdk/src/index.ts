@@ -27,6 +27,29 @@ export interface BaseState {
   rngSeed: number;
 }
 
+/**
+ * 插件声明的一个可选扩展模块。
+ *
+ * 同一个扩展品牌的不同玩法（例如马赛克水晶的两面玩家板）可以拆成多个
+ * id、用相同的 `group` 标记互斥；平台不关心内容，只负责选择和隔离 Elo。
+ */
+export interface GameExpansionDef {
+  /** 插件内唯一，小写字母/数字/连字符 */
+  id: string;
+  name: string;
+  description?: string;
+  /** 同组扩展互斥；不填表示可以任意组合 */
+  group?: string;
+}
+
+/** 快照里给客户端看的扩展信息（manifest 声明 + 本桌实际选择） */
+export interface SelectedExpansionInfo {
+  id: string;
+  name: string;
+  description?: string;
+  group?: string;
+}
+
 export interface GameManifest {
   /** 全局唯一，不可变 */
   id: string;
@@ -68,6 +91,11 @@ export interface GameManifest {
     choices: { value: string; label: string; hint?: string }[];
     default: string;
   }[];
+  /**
+   * 可选扩展模块。开桌时由房主选择，选中的 id 通过 createState 的
+   * `expansions` 传给插件；不同组合的 Elo 分开计算。
+   */
+  expansions?: GameExpansionDef[];
   /** 牌桌界面上想改的地方：比如这个游戏的日志没用，就别占一列 */
   ui?: {
     /** 隐藏右侧「对局日志」（聊天还在） */
@@ -177,6 +205,11 @@ export interface StateDef<S extends BaseState = BaseState> {
 export interface SetupContext {
   players: PlayerId[];
   options: Record<string, unknown>;
+  /**
+   * 本桌选中的扩展 id，按 manifest 声明顺序排列；不选就是空数组。
+   * 老插件可以忽略。
+   */
+  expansions?: string[];
   seed: number;
   now: number;
 }
@@ -283,6 +316,8 @@ export interface ReplayPayload {
   gameName: string;
   gameVersion: string;
   status: TableStatus;
+  /** 本局实际使用的扩展；没有就是空数组 */
+  expansions: SelectedExpansionInfo[];
   players: TablePlayerInfo[];
   steps: ReplayStep[];
   truncated: boolean;
@@ -292,6 +327,16 @@ export interface LeaderboardEntry {
   userId: PlayerId;
   name: string;
   rating: number;
+  games: number;
+}
+
+/** 一个游戏已经产生过 Elo 的范围：本体 + 各扩展组合 */
+export interface RatingScopeInfo {
+  /** 分榜键；本体为空串 */
+  value: string;
+  /** 展示名；本体为「本体」 */
+  label: string;
+  /** 这个榜上的总场次（按 ratings.games 之和） */
   games: number;
 }
 
@@ -470,6 +515,10 @@ export interface AdminRatingRow {
 export interface PlayerStatsRow {
   gameId: string;
   gameName: string;
+  /** 本体为空串，扩展组合为 `id+id`；与 Elo 分榜键一致 */
+  ratingScope: string;
+  /** 展示用：本体 / 扩展名称组合 */
+  ratingLabel: string;
   games: number;
   wins: number;
 }
@@ -478,6 +527,8 @@ export interface RecentMatchRow {
   tableId: string;
   gameId: string;
   gameName: string;
+  ratingScope: string;
+  ratingLabel: string;
   rank: number;
   players: number;
   isWin: boolean;
@@ -499,6 +550,12 @@ export interface TableSnapshot {
   minPlayers: number;
   maxPlayers: number;
   options: Record<string, unknown>;
+  /** 本桌实际选中的扩展（已按 manifest 解析成名称） */
+  expansions: SelectedExpansionInfo[];
+  /** Elo 分榜键：本体为空串，扩展组合为 `id+id` */
+  ratingScope: string;
+  /** 展示用：本体 / 扩展名称组合 */
+  ratingLabel: string;
   players: TablePlayerInfo[];
   you: { id: PlayerId; isPlayer: boolean; isHost: boolean };
   /** 未开局时为 null */
@@ -528,6 +585,11 @@ export interface TableSnapshot {
    * 已经读过、或者这一版没写 notes，就是 null。
    */
   notice: VersionNotice | null;
+  /**
+   * 本局使用了扩展、而你这个非房主玩家还没读过 → 在版本公告之后提示一次。
+   * 没有扩展、已读、房主或观战者都是 null。
+   */
+  expansionNotice: ExpansionNotice | null;
 }
 
 export interface VersionNotice {
@@ -535,6 +597,15 @@ export interface VersionNotice {
   gameName: string;
   version: string;
   notes: string[];
+}
+
+export interface ExpansionNotice {
+  tableId: string;
+  gameId: string;
+  gameVersion: string;
+  /** 扩展组合签名（= ratingScope），用于已读去重 */
+  key: string;
+  items: SelectedExpansionInfo[];
 }
 
 export type TableMode = 'realtime' | 'turnbased';
@@ -549,6 +620,9 @@ export interface TableSummary {
   maxPlayers: number;
   hostName: string;
   createdAt: number;
+  expansions: SelectedExpansionInfo[];
+  ratingScope: string;
+  ratingLabel: string;
   /** 我在这张桌里的角色，用于「我的对局」列表 */
   mine?: 'host' | 'player' | 'spectator';
   mode: TableMode;

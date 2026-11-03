@@ -202,8 +202,13 @@ export function UserProfile({
                 </thead>
                 <tbody>
                   {profile.stats.map((row) => (
-                    <tr key={row.gameId}>
-                      <td>{row.gameName}</td>
+                    <tr key={`${row.gameId}:${row.ratingScope}`}>
+                      <td>
+                        {row.gameName}
+                        {row.ratingScope ? (
+                          <span className="muted small"> · {row.ratingLabel}</span>
+                        ) : null}
+                      </td>
                       <td>{row.games}</td>
                       <td>{row.wins}</td>
                       <td>{row.games === 0 ? '—' : `${Math.round((row.wins / row.games) * 100)}%`}</td>
