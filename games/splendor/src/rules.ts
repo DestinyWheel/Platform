@@ -3,7 +3,7 @@
  *
  * 这里只做计算，不碰状态机：状态机在 server.ts，客户端也用这些函数算"能不能买"。
  */
-import type { Card, Gem, Noble, TokenColor } from './data.js';
+import type { Card, CityRequirement, CitySide, Gem, Noble, TokenColor } from './data.js';
 import { GEMS } from './data.js';
 
 export type TokenBag = Record<TokenColor, number>;
@@ -81,6 +81,40 @@ export function planPayment(
 /** 这个贵族能不能来拜访：红利是否满足 */
 export function nobleQualifies(noble: Noble, bonuses: Record<Gem, number>): boolean {
   return GEMS.every((gem) => (noble.need[gem] ?? 0) <= (bonuses[gem] ?? 0));
+}
+
+/**
+ * 城市板块的红利要求。
+ * - fixed：指定颜色各几个
+ * - any：同一种颜色 N 个（自选哪一色）
+ * - anyOther：base 色 N 个 + 另一种任意颜色 N 个
+ * - none：不看红利
+ */
+export function cityRequirementMet(
+  requirement: CityRequirement,
+  bonuses: Record<Gem, number>,
+): boolean {
+  if (requirement.kind === 'none') return true;
+  if (requirement.kind === 'fixed') {
+    return GEMS.every((gem) => (requirement.need[gem] ?? 0) <= (bonuses[gem] ?? 0));
+  }
+  if (requirement.kind === 'any') {
+    return GEMS.some((gem) => (bonuses[gem] ?? 0) >= requirement.count);
+  }
+  const base = bonuses[requirement.base] ?? 0;
+  if (base < requirement.count) return false;
+  return GEMS.some(
+    (gem) => gem !== requirement.base && (bonuses[gem] ?? 0) >= requirement.count,
+  );
+}
+
+/** 城市板块整条要求：声望够了 + 红利够了 */
+export function cityQualifies(
+  side: CitySide,
+  prestige: number,
+  bonuses: Record<Gem, number>,
+): boolean {
+  return prestige >= side.prestige && cityRequirementMet(side.requirement, bonuses);
 }
 
 /** 卡面总价，用于排序和展示 */

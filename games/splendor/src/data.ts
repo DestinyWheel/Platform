@@ -282,6 +282,109 @@ export const POWER_BY_ID: Record<string, TradingPower> = Object.fromEntries(
 /** 每人 5 枚纹章 */
 export const SEALS_PER_PLAYER = 5;
 
+/* ------------------------------------------------------------------ */
+/* 繁华之城（Cities）                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 城市板块的要求有三种写法：
+ * - fixed：指定颜色各几个
+ * - any：同一种颜色 N 个（玩家自选是哪一色）
+ * - anyOther：指定颜色 base 个 + 另一种任意颜色 count 个
+ * - none：只要声望分，不要红利
+ */
+export type CityRequirement =
+  | { kind: 'fixed'; need: Partial<Record<Gem, number>> }
+  | { kind: 'any'; count: number }
+  | { kind: 'anyOther'; base: Gem; count: number }
+  | { kind: 'none' };
+
+export interface CitySide {
+  prestige: number;
+  requirement: CityRequirement;
+}
+
+export interface CityTile {
+  id: string;
+  name: string;
+  /** 正反两面，开局随机取一面 */
+  sides: [CitySide, CitySide];
+}
+
+/**
+ * 7 张城市板块 × 双面。
+ * 数值按用户提供的实物清单录入（2026-11-04），"任意" 指同一颜色任意一种，
+ * "其他" 指与该色不同的另一种颜色。
+ */
+export const CITY_TILES: CityTile[] = [
+  {
+    id: 'city-bruges',
+    name: '布鲁日',
+    sides: [
+      { prestige: 12, requirement: { kind: 'fixed', need: { green: 3, red: 3, blue: 3, black: 3 } } },
+      { prestige: 12, requirement: { kind: 'fixed', need: { white: 3, green: 3, red: 3, blue: 3 } } },
+    ],
+  },
+  {
+    id: 'city-lyon',
+    name: '里昂',
+    sides: [
+      { prestige: 14, requirement: { kind: 'anyOther', base: 'white', count: 4 } },
+      { prestige: 14, requirement: { kind: 'anyOther', base: 'black', count: 4 } },
+    ],
+  },
+  {
+    id: 'city-lisbon',
+    name: '里斯本',
+    sides: [
+      { prestige: 15, requirement: { kind: 'any', count: 5 } },
+      { prestige: 13, requirement: { kind: 'any', count: 6 } },
+    ],
+  },
+  {
+    id: 'city-seville',
+    name: '塞维利亚',
+    sides: [
+      { prestige: 13, requirement: { kind: 'fixed', need: { green: 4, blue: 3 } } },
+      {
+        prestige: 14,
+        requirement: { kind: 'fixed', need: { white: 2, green: 2, red: 2, blue: 2, black: 2 } },
+      },
+    ],
+  },
+  {
+    id: 'city-venice',
+    name: '威尼斯',
+    sides: [
+      { prestige: 13, requirement: { kind: 'fixed', need: { black: 4, green: 3 } } },
+      { prestige: 13, requirement: { kind: 'fixed', need: { red: 4, black: 3 } } },
+    ],
+  },
+  {
+    id: 'city-florence',
+    name: '佛罗伦萨',
+    sides: [
+      { prestige: 13, requirement: { kind: 'fixed', need: { blue: 4, white: 3 } } },
+      { prestige: 13, requirement: { kind: 'fixed', need: { white: 4, red: 3 } } },
+    ],
+  },
+  {
+    id: 'city-pisa',
+    name: '比萨',
+    sides: [
+      { prestige: 17, requirement: { kind: 'none' } },
+      {
+        prestige: 16,
+        requirement: { kind: 'fixed', need: { white: 1, green: 1, red: 1, blue: 1, black: 1 } },
+      },
+    ],
+  },
+];
+
+export const CITY_BY_ID: Record<string, CityTile> = Object.fromEntries(
+  CITY_TILES.map((tile) => [tile.id, tile]),
+);
+
 /** 2 / 3 / 4 人局的宝石堆与贵族数 */
 export function setupCounts(playerCount: number): { gem: number; nobles: number } {
   if (playerCount <= 2) return { gem: 4, nobles: 3 };

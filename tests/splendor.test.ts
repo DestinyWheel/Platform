@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { applyAction, createInitialState } from '../packages/engine/src/index.ts';
 import splendor, { type SplendorState } from '../games/splendor/src/server.ts';
-import { CARDS, CARD_BY_ID, GEMS, NOBLES } from '../games/splendor/src/data.ts';
+import { CARDS, CARD_BY_ID, CITY_TILES, GEMS, NOBLES } from '../games/splendor/src/data.ts';
 import { emptyTokens } from '../games/splendor/src/rules.ts';
 
 const SETUP = (players: string[], expansions: string[] = []) => ({
@@ -57,6 +57,35 @@ test('璀璨宝石：90 张卡与 10 张贵族', () => {
     const need = Object.values(noble.need).filter((value) => value !== undefined);
     assert.deepEqual(need.sort(), [4, 4]);
   }
+});
+
+test('璀璨宝石：7 张城市板块的数值', () => {
+  assert.equal(CITY_TILES.length, 7);
+  const ids = new Set(CITY_TILES.map((tile) => tile.id));
+  assert.equal(ids.size, 7, '城市 id 不能重复');
+
+  for (const tile of CITY_TILES) {
+    assert.equal(tile.sides.length, 2, `${tile.name} 应该有两面`);
+    for (const side of tile.sides) {
+      assert.ok(side.prestige >= 12 && side.prestige <= 17, `${tile.name} 的分数 ${side.prestige} 不合理`);
+    }
+    // 每一面至少要有一条可判断的要求
+    for (const side of tile.sides) {
+      if (side.requirement.kind === 'fixed') {
+        const total = Object.values(side.requirement.need).reduce((sum, value) => sum + (value ?? 0), 0);
+        assert.ok(total > 0, `${tile.name} 的固定要求不能为空`);
+      }
+      if (side.requirement.kind === 'any') {
+        assert.ok(side.requirement.count >= 1 && side.requirement.count <= 6);
+      }
+    }
+  }
+
+  // 文档里给的三个示例要能对上
+  const florida = CITY_TILES.find((tile) => tile.id === 'city-venice')!;
+  assert.deepEqual(florida.sides[1].requirement, { kind: 'fixed', need: { red: 4, black: 3 } });
+  const lisbon = CITY_TILES.find((tile) => tile.id === 'city-lisbon')!;
+  assert.deepEqual(lisbon.sides[0].requirement, { kind: 'any', count: 5 });
 });
 
 test('璀璨宝石：2 / 4 人开局的宝石与贵族数量', () => {
@@ -263,8 +292,71 @@ test('璀璨宝石：贸易之路占下能力，黄金顶两颗', () => {
   assert.equal(bought.data.a.tokens.gold, 0);
 });
 
+test('璀璨宝石：繁华之城开局不摆贵族，摆 3 张城市板块', () => {
+  const state = fresh(['a', 'b'], ['cities']);
+  assert.equal(state.expansion, 'cities');
+  assert.equal(state.nobles.length, 0, '城市模式不用贵族');
+  assert.equal(state.cities.length, 3);
+  for (const city of state.cities) {
+    assert.equal(city.owner, null);
+    assert.ok(city.side === 0 || city.side === 1);
+  }
+  assert.equal(new Set(state.cities.map((city) => city.key)).size, 3, '城市 key 不能重复');
+});
+
+test('璀璨宝石：满足城市要求时回合结束自动拿城，本轮走完即结束', () => {
+  const state = fresh(['a', 'b'], ['cities']);
+  state.cities = [{ key: 'city-venice-1', tileId: 'city-venice', side: 1, owner: null }];
+  // 威尼斯反面：13 分 + 红 4 + 黑 3
+  state.data.a.cards = [
+    ...CARDS.filter((card) => card.bonus === 'red').slice(0, 4),
+    ...CARDS.filter((card) => card.bonus === 'black').slice(0, 3),
+  ].map((card) => card.id);
+  state.bonusPoints.a = 13;
+
+  const took = run(state, 'a', { type: 'take3', payload: { colors: ['white', 'blue', 'green'] } });
+  assert.equal(took.cities[0]!.owner, 'a');
+  assert.equal(took.endTriggered, true);
+  assert.equal(took.turn, 1, '拿城后对手还有一回合');
+
+  const end = run(took, 'b', { type: 'take3', payload: { colors: ['white', 'blue', 'green'] } });
+  assert.equal(end.finished, true);
+  assert.deepEqual(end.ranking?.[0], ['a'], '唯一拿到城市板块的人获胜');
+});
+
+test('璀璨宝石：多人拿到城市板块时比声望；城市模式没有 15 分终局', () => {
+  const state = fresh(['a', 'b'], ['cities']);
+  state.cities = [
+    { key: 'city-pisa-0', tileId: 'city-pisa', side: 0, owner: null },
+    { key: 'city-venice-1', tileId: 'city-venice', side: 1, owner: null },
+  ];
+  state.bonusPoints.a = 17; // 比萨正面：只要 17 分
+  state.data.b.cards = [
+    ...CARDS.filter((card) => card.bonus === 'red').slice(0, 4),
+    ...CARDS.filter((card) => card.bonus === 'black').slice(0, 3),
+  ].map((card) => card.id);
+  state.bonusPoints.b = 13;
+
+  const first = run(state, 'a', { type: 'take3', payload: { colors: ['white', 'blue', 'green'] } });
+  assert.equal(first.cities[0]!.owner, 'a');
+
+  const second = run(first, 'b', { type: 'take3', payload: { colors: ['white', 'blue', 'green'] } });
+  assert.equal(second.finished, true);
+  assert.equal(second.cities[1]!.owner, 'b');
+  assert.deepEqual(second.ranking?.[0], ['a'], '两人都有城市时比声望');
+
+  // 城市模式没有「15 分结束」：给 20 分但拿不到城市就继续打
+  const noCity = fresh(['a', 'b'], ['cities']);
+  noCity.cities = [{ key: 'city-venice-1', tileId: 'city-venice', side: 1, owner: null }];
+  noCity.bonusPoints.a = 20;
+  const continued = run(noCity, 'a', { type: 'take3', payload: { colors: ['white', 'blue', 'green'] } });
+  assert.equal(continued.finished, false);
+  assert.equal(continued.endTriggered, false);
+  assert.equal(continued.turn, 1);
+});
+
 test('璀璨宝石：任意局面都能走完（随机 300 步）', () => {
-  for (const expansions of [[], ['strongholds'], ['trading-posts']]) {
+  for (const expansions of [[], ['cities'], ['strongholds'], ['trading-posts']]) {
     let state = fresh(['a', 'b', 'c'], expansions);
     const players = state.players;
     let steps = 0;

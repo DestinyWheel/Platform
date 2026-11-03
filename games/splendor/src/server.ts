@@ -21,6 +21,8 @@ import type {
 } from '@platform/sdk';
 import {
   CARD_BY_ID,
+  CITY_BY_ID,
+  CITY_TILES,
   DECKS,
   GEMS,
   NOBLE_BY_ID,
@@ -31,11 +33,13 @@ import {
   TRADING_POWERS,
   setupCounts,
   type Card,
+  type CitySide,
   type Gem,
   type TokenColor,
 } from './data.js';
 import {
   bonusCounts,
+  cityQualifies,
   emptyTokens,
   nobleQualifies,
   planPayment,
@@ -43,7 +47,7 @@ import {
   type TokenBag,
 } from './rules.js';
 
-export type ExpansionId = 'strongholds' | 'trading-posts';
+export type ExpansionId = 'cities' | 'strongholds' | 'trading-posts';
 type Level = '1' | '2' | '3';
 
 const LEVELS: Level[] = ['1', '2', '3'];
@@ -61,6 +65,14 @@ export interface PlayerData {
 export interface StrongholdSpot {
   owner: PlayerId;
   count: number;
+}
+
+/** 场上的一张城市板块（同一张牌的两面算两个实例） */
+export interface CityInstance {
+  key: string;
+  tileId: string;
+  side: 0 | 1;
+  owner: PlayerId | null;
 }
 
 export interface SplendorState extends BaseState {
@@ -85,9 +97,14 @@ export interface SplendorState extends BaseState {
   conquestUsed: boolean;
   /** 买走/预留后等待补牌的位置 */
   pendingRefill: { level: Level; index: number } | null;
-  /** 待选贵族 / 待选能力 */
+  /** 待选贵族 / 待选能力 / 待选城市 */
   pendingNobles: string[];
   pendingPowers: string[];
+  pendingCities: string[];
+  /** 本回合的城市检查是否已经做过 */
+  cityResolved: boolean;
+  /** 繁华之城：场上 3 张城市板块 */
+  cities: CityInstance[];
   endReason: string | null;
 }
 
@@ -234,6 +251,40 @@ function conquestTargets(state: SplendorState, player: PlayerId): string[] {
     .filter((cardId) => canAfford(state, player, CARD_BY_ID[cardId]!));
 }
 
+function citySideOf(instance: CityInstance): CitySide {
+  return CITY_BY_ID[instance.tileId]!.sides[instance.side];
+}
+
+/** 回合结束能拿的城市板块：已经有一张的人不再拿 */
+function qualifyingCities(state: SplendorState, player: PlayerId): CityInstance[] {
+  if (state.expansion !== 'cities') return [];
+  if (state.cities.some((city) => city.owner === player)) return [];
+  const bonuses = bonusesOf(state, player);
+  const prestige = prestigeOf(state, player);
+  return state.cities.filter(
+    (city) => !city.owner && cityQualifies(citySideOf(city), prestige, bonuses),
+  );
+}
+
+function takeCity(
+  state: SplendorState,
+  ctx: ActionContext<SplendorState>,
+  key: string,
+): void {
+  const city = state.cities.find((item) => item.key === key);
+  if (!city || city.owner) return;
+  city.owner = ctx.playerId;
+  // 有人拿到城市板块：本轮走完就结束
+  state.endTriggered = true;
+  const side = citySideOf(city);
+  ctx.emit({
+    type: 'log',
+    key: 'sp.city',
+    args: { player: ctx.playerId, city: city.tileId, prestige: side.prestige },
+  });
+  ctx.emit({ type: 'achievement', player: ctx.playerId, key: 'city-lord' });
+}
+
 /* ------------------------------------------------------------------ */
 /* 回合推进                                                            */
 /* ------------------------------------------------------------------ */
@@ -337,8 +388,23 @@ function afterRefill(state: SplendorState, ctx: ActionContext<SplendorState>): v
 }
 
 function finishTurn(state: SplendorState, ctx: ActionContext<SplendorState>): void {
-  const reached = state.players.some((player) => prestigeOf(state, player) >= 15);
-  if (reached) state.endTriggered = true;
+  // 繁华之城：回合结束先看能不能拿城市板块（拿到就直接触发终局）
+  if (state.expansion === 'cities' && !state.cityResolved) {
+    const player = currentPlayer(state);
+    const options = qualifyingCities(state, player);
+    if (options.length > 1) {
+      state.pendingCities = options.map((city) => city.key);
+      ctx.goTo('city');
+      return;
+    }
+    state.cityResolved = true;
+    if (options.length === 1) takeCity(state, ctx, options[0]!.key);
+  }
+
+  if (state.expansion !== 'cities') {
+    const reached = state.players.some((player) => prestigeOf(state, player) >= 15);
+    if (reached) state.endTriggered = true;
+  }
 
   const next = (state.turn + 1) % state.players.length;
   if (state.endTriggered && next === 0) {
@@ -351,6 +417,7 @@ function finishTurn(state: SplendorState, ctx: ActionContext<SplendorState>): vo
   state.conquestUsed = false;
   state.pendingNobles = [];
   state.pendingPowers = [];
+  state.pendingCities = [];
   ctx.goTo('turn');
 }
 
@@ -359,14 +426,29 @@ function finishGame(state: SplendorState, ctx: ActionContext<SplendorState>): vo
     player,
     prestige: prestigeOf(state, player),
     cards: dataOf(state, player).cards.length,
+    city: state.cities.some((item) => item.owner === player),
   }));
-  rows.sort((a, b) => b.prestige - a.prestige || a.cards - b.cards);
+
+  if (state.expansion === 'cities') {
+    // 只有一个人拿到城市板块 -> 他赢；多人拿到 -> 其中声望最高的赢
+    rows.sort(
+      (a, b) => Number(b.city) - Number(a.city) || b.prestige - a.prestige || a.cards - b.cards,
+    );
+  } else {
+    rows.sort((a, b) => b.prestige - a.prestige || a.cards - b.cards);
+  }
 
   const ranking: PlayerId[][] = [];
   for (const row of rows) {
     const last = ranking[ranking.length - 1];
     const previous = rows.find((item) => item.player === last?.[0]);
-    if (last && previous && previous.prestige === row.prestige && previous.cards === row.cards) {
+    if (
+      last &&
+      previous &&
+      previous.prestige === row.prestige &&
+      previous.cards === row.cards &&
+      previous.city === row.city
+    ) {
       last.push(row.player);
     } else {
       ranking.push([row.player]);
@@ -376,7 +458,7 @@ function finishGame(state: SplendorState, ctx: ActionContext<SplendorState>): vo
   state.ranking = ranking;
   state.finished = true;
   state.phase = 'finished';
-  state.endReason = 'fifteen';
+  state.endReason = state.expansion === 'cities' ? 'cities' : 'fifteen';
   state.endTriggered = true;
 
   const scores: Record<string, number> = {};
@@ -709,6 +791,23 @@ const choosePower: ActionDef<SplendorState> = {
   },
 };
 
+const chooseCity: ActionDef<SplendorState> = {
+  allowedIn: ['city'],
+  schema: z.object({ key: z.string().min(1) }),
+  validate(state, action) {
+    const { key } = action.payload as { key: string };
+    if (!state.pendingCities.includes(key)) return { ok: false, reason: '这张城市板块现在拿不了' };
+    return { ok: true };
+  },
+  reduce(state, action, ctx) {
+    const { key } = action.payload as { key: string };
+    state.cityResolved = true;
+    state.pendingCities = [];
+    takeCity(state, ctx, key);
+    finishTurn(state, ctx);
+  },
+};
+
 const discardToken: ActionDef<SplendorState> = {
   allowedIn: ['discard'],
   schema: z.object({ color: z.enum(['white', 'blue', 'green', 'red', 'black', 'gold']) }),
@@ -727,8 +826,7 @@ const discardToken: ActionDef<SplendorState> = {
 };
 
 /** 兜底：桌上没宝石、也买不起任何牌时才会出现，避免死锁 */
-const pass: ActionDef<SplendorState> = {
-  allowedIn: ['turn'],
+const pass: ActionDef<SplendorState> = {  allowedIn: ['turn'],
   schema: z.object({}),
   reduce(state, _action, ctx) {
     ctx.emit({ type: 'log', key: 'sp.pass', args: { player: ctx.playerId } });
@@ -747,10 +845,19 @@ const states: Record<string, StateDef<SplendorState>> = {
       state.conquestUsed = false;
       state.pendingNobles = [];
       state.pendingPowers = [];
+      state.pendingCities = [];
+      state.cityResolved = false;
     },
     onTimeout(state, ctx) {
       const moves = turnMoves(state, currentPlayer(state));
       return moves[0] ?? { type: 'pass', payload: {} };
+    },
+  },
+  city: {
+    type: 'activePlayer',
+    onTimeout(state) {
+      const key = state.pendingCities[0];
+      return key ? { type: 'chooseCity', payload: { key } } : null;
     },
   },
   'buy-gem': {
@@ -924,8 +1031,14 @@ const splendor: GamePlugin<SplendorState> = {
     realtime: { fast: 45, normal: 90, slow: 180 },
     description: '收宝石、买发展卡、请贵族；2–4 人，先到 15 分并就位的人赢。',
     intro:
-      '经典《璀璨宝石》。每回合四选一：拿 3 个异色宝石、拿 2 个同色宝石、预留一张卡并拿黄金、或买一张卡。\n\n## 每回合\n\n- 拿 3 个不同颜色；或拿 2 个同色（该色场上至少 4 个）\n- 预留 1 张卡（手牌上限 3），同时拿 1 个黄金；黄金可当任意颜色\n- 买卡：场上的或自己预留的，红利会永久抵扣同色价格\n\n## 结束\n\n有人达到 15 分后，本轮走完即结束；分高者胜，同分则买卡少的人胜。\n\n## 扩展\n\n- 荣誉之战：买卡后必须放置/移动要塞或拆掉对手一个；同一张牌上三个自己的要塞可以立刻再买一次\n- 贸易之路：回合结束满足条件即可占下一条能力，永久生效',
+      '经典《璀璨宝石》。每回合四选一：拿 3 个异色宝石、拿 2 个同色宝石、预留一张卡并拿黄金、或买一张卡。\n\n## 每回合\n\n- 拿 3 个不同颜色；或拿 2 个同色（该色场上至少 4 个）\n- 预留 1 张卡（手牌上限 3），同时拿 1 个黄金；黄金可当任意颜色\n- 买卡：场上的或自己预留的，红利会永久抵扣同色价格\n\n## 结束\n\n有人达到 15 分后，本轮走完即结束；分高者胜，同分则买卡少的人胜。\n\n## 扩展\n\n- 繁华之城：不摆贵族，改抢 3 座城市；拿到一块城市板块，本轮走完即结束\n- 荣誉之战：买卡后必须放置/移动要塞或拆掉对手一个；同一张牌上三个自己的要塞可以立刻再买一次\n- 贸易之路：回合结束满足条件即可占下一条能力，永久生效',
     expansions: [
+      {
+        id: 'cities',
+        name: '城市扩展 · 繁华之城',
+        description: '不摆贵族，改抢 3 座城市：拿到一块城市板块，本轮走完就结束。',
+        group: 'cities',
+      },
       {
         id: 'strongholds',
         name: '城市扩展 · 荣誉之战',
@@ -943,6 +1056,7 @@ const splendor: GamePlugin<SplendorState> = {
       { id: 'first-win', name: '首胜', description: '在璀璨宝石里赢下第一局', icon: '💎', color: '#3f4a7a' },
       { id: 'fifteen', name: '十五分', description: '一局打到 15 分以上', icon: '✨', color: '#6b5320' },
       { id: 'noble-collector', name: '贵族收藏', description: '一局请到 3 位贵族', icon: '👑', color: '#4a2f5a' },
+      { id: 'city-lord', name: '城市之主', description: '拿到一块城市板块', icon: '🏙️', color: '#7a5a2c' },
       { id: 'stronghold-master', name: '三堡压顶', description: '三个要塞压在同一张卡上', icon: '🏰', color: '#2c5a4a' },
       { id: 'trade-empire', name: '贸易帝国', description: '一局占下全部 5 条贸易之路能力', icon: '🐫', color: '#5a4a2c' },
     ],
@@ -951,7 +1065,8 @@ const splendor: GamePlugin<SplendorState> = {
   createState({ players, expansions, seed }: SetupContext): SplendorState {
     const rng = mulberry32(seed);
     const chosen = (expansions ?? []).find(
-      (id): id is ExpansionId => id === 'strongholds' || id === 'trading-posts',
+      (id): id is ExpansionId =>
+        id === 'cities' || id === 'strongholds' || id === 'trading-posts',
     );
 
     const decks: Record<Level, string[]> = {
@@ -980,6 +1095,17 @@ const splendor: GamePlugin<SplendorState> = {
       bonusPoints[player] = 0;
     }
 
+    // 繁华之城：不摆贵族，改摆 3 张城市板块（正反面随机）
+    const cities: CityInstance[] =
+      chosen === 'cities'
+        ? shuffle(CITY_TILES, rng)
+            .slice(0, 3)
+            .map((tile) => {
+              const side = (rng() < 0.5 ? 0 : 1) as 0 | 1;
+              return { key: `${tile.id}-${side}`, tileId: tile.id, side, owner: null };
+            })
+        : [];
+
     return {
       players: [...players],
       turn: 0,
@@ -993,7 +1119,8 @@ const splendor: GamePlugin<SplendorState> = {
       data,
       board,
       decks,
-      nobles: shuffle(NOBLES.map((noble) => noble.id), rng).slice(0, nobles),
+      nobles: chosen === 'cities' ? [] : shuffle(NOBLES.map((noble) => noble.id), rng).slice(0, nobles),
+      cities,
       strongholds: {},
       seals,
       bonusPoints,
@@ -1003,6 +1130,8 @@ const splendor: GamePlugin<SplendorState> = {
       pendingRefill: null,
       pendingNobles: [],
       pendingPowers: [],
+      pendingCities: [],
+      cityResolved: false,
       endReason: null,
     };
   },
@@ -1021,6 +1150,7 @@ const splendor: GamePlugin<SplendorState> = {
     removeStronghold,
     chooseNoble,
     choosePower,
+    chooseCity,
     discardToken,
     pass,
   },
@@ -1044,10 +1174,12 @@ const splendor: GamePlugin<SplendorState> = {
           '3': state.decks['3'].length,
         },
         nobles: state.nobles,
+        cities: state.cities,
         strongholds: state.strongholds,
         conquestTargets: state.finished ? [] : conquestTargets(state, currentPlayer(state)),
         pendingNobles: state.pendingNobles,
         pendingPowers: state.pendingPowers,
+        pendingCities: state.pendingCities,
         endTriggered: state.endTriggered,
         players: state.players.map((player) => playerView(state, player, me)),
         you: me,
@@ -1076,6 +1208,9 @@ const splendor: GamePlugin<SplendorState> = {
     }
     if (state.phase === 'seal' && currentPlayer(state) === playerId) {
       return state.pendingPowers.map((powerId) => ({ type: 'choosePower', payload: { powerId } }));
+    }
+    if (state.phase === 'city' && currentPlayer(state) === playerId) {
+      return state.pendingCities.map((key) => ({ type: 'chooseCity', payload: { key } }));
     }
     if (state.phase === 'discard' && currentPlayer(state) === playerId) {
       const tokens = dataOf(state, playerId).tokens;

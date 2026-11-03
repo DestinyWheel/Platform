@@ -31,3 +31,6 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# 规则书等参考物料：版权内容，只放本地
+*.docx
