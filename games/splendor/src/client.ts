@@ -82,14 +82,13 @@ interface ViewData {
 }
 
 const CSS = `
-.sp-root { display: flex; flex-direction: column; gap: 12px; color: #e6edf3; position: relative; }
+.sp-root { display: flex; flex-direction: column; gap: 12px; color: #e6edf3; position: relative; container-type: inline-size; }
 .sp-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border: 1px solid #262d38; border-radius: 12px; background: rgba(22,27,34,.72); }
 .sp-turn { font-weight: 700; }
 .sp-muted { color: #8b98a7; font-size: 12px; }
 .sp-badge { border: 1px solid #2c3745; border-radius: 999px; padding: 2px 9px; font-size: 11px; color: #c3ccd8; }
 .sp-badge.warn { border-color: rgba(210,153,34,.6); color: #e3b341; }
 .sp-main { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 12px; align-items: start; }
-@media (max-width: 980px) { .sp-main { grid-template-columns: 1fr; } }
 .sp-board { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #262d38; border-radius: 14px; background: radial-gradient(circle at 50% 0%, rgba(76,141,255,.08), rgba(15,20,27,.9)); }
 .sp-row { display: flex; align-items: center; gap: 10px; }
 .sp-row-label { width: 74px; flex: none; display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: #8b98a7; }
@@ -185,6 +184,12 @@ const CSS = `
 .sp-any { display: inline-flex; gap: 2px; align-items: center; }
 .sp-any i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; border: 1px solid rgba(255,255,255,.25); }
 .sp-city-owner { font-size: 11px; color: #e3b341; }
+/* 牌桌右侧还有日志栏，实际可用宽度比视口窄很多：按容器宽度收成单列 */
+@container (max-width: 900px) {
+  .sp-main { grid-template-columns: 1fr; }
+  .sp-side { flex-direction: row; flex-wrap: wrap; align-items: stretch; }
+  .sp-side > .sp-panel { flex: 1 1 220px; }
+}
 `;
 
 const esc = (value: string): string =>
@@ -763,4 +768,8 @@ export function createSplendorClient(): GameClient {
   };
 }
 
-export default createSplendorClient;
+/** 宿主直接拿这个实例的三件套（mount / update / unmount），和别的插件一致 */
+const client = createSplendorClient();
+
+export default client;
+export { client };

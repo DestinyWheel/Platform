@@ -1,4 +1,4 @@
-﻿# 把当前 HEAD 部署到 https://150.158.13.77/
+# 把当前 HEAD 部署到 https://150.158.13.77/
 #
 # 用法（PowerShell，在仓库根目录）：
 #   powershell -ExecutionPolicy Bypass -File .\scripts\deploy-to-server.ps1
@@ -204,7 +204,7 @@ if [ -n "$BASE" ]; then
   echo "== 新游戏发布检查 =="
   GAMES_JSON="$(curl -kfsS --max-time 10 "$BASE/api/games" || true)"
   MISSING=""
-  for id in splendor-duel azul-duel okey-101; do
+  for id in splendor splendor-duel azul-duel okey-101; do
     if echo "$GAMES_JSON" | grep -q "\"$id\""; then
       echo "  ✓ $id"
     else
